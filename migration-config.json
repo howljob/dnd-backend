@@ -1,0 +1,9 @@
+{
+  "db": {
+    "host": "localhost",
+    "port": 55432,
+    "database": "dnd_hub",
+    "user": "postgres",
+    "password": "postgres"
+  }
+}
