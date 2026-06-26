@@ -9,6 +9,7 @@
     "migrate:create": "node-pg-migrate create",
     "migrate:up": "node-pg-migrate up --config-file migration-config.json --config-value db",
     "migrate:down": "node-pg-migrate down --config-file migration-config.json --config-value db",
+    "test": "node --test",
     "admin:promote": "node src/scripts/promote-admin.js",
     "wiki:import-srd": "node src/scripts/import-wiki-srd.js"
   },
@@ -23,7 +24,8 @@
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
     "nodemailer": "^8.0.2",
-    "pg": "^8.20.0"
+    "pg": "^8.20.0",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "node-pg-migrate": "^8.0.4",

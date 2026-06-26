@@ -63,24 +63,36 @@ async function requireAuth(req, res, next) {
   }
 
   try {
-    const payload = jwt.verify(parts[1], env.jwtAccessSecret);
-    const sessionState = await resolveSession(payload);
-    if (sessionState === false) {
-      return unauthorized(res);
-    }
-
-    req.auth = {
-      userId: payload.sub,
-      email: payload.email,
-      role: payload.role,
-      accountStatus: payload.accountStatus || 'active',
-      sessionId: sessionState
-    };
+    req.auth = await authenticateAccessToken(parts[1]);
 
     return next();
   } catch (error) {
     return unauthorized(res);
   }
+}
+
+async function authenticateAccessToken(token) {
+  if (!env.jwtAccessSecret) {
+    const error = new Error('JWT access secret is not configured');
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const payload = jwt.verify(token, env.jwtAccessSecret);
+  const sessionState = await resolveSession(payload);
+  if (!sessionState) {
+    const error = new Error('Unauthorized');
+    error.statusCode = 401;
+    throw error;
+  }
+
+  return {
+    userId: payload.sub,
+    email: payload.email,
+    role: payload.role,
+    accountStatus: payload.accountStatus || 'active',
+    sessionId: sessionState
+  };
 }
 
 function optionalAuth(req, res, next) {
@@ -111,5 +123,6 @@ function optionalAuth(req, res, next) {
 
 module.exports = {
   requireAuth,
-  optionalAuth
+  optionalAuth,
+  authenticateAccessToken
 };

@@ -17,6 +17,7 @@ const adminContentRouter = require('./modules/admin-content/admin-content.routes
 const adminMonitoringRouter = require('./modules/admin-monitoring/admin-monitoring.routes');
 const communityRouter = require('./modules/community/community.routes');
 const profileRouter = require('./modules/profile/profile.routes');
+const tabletopRouter = require('./modules/tabletop/tabletop.routes');
 const {
   wikiRouter,
   wikiAdminRouter
@@ -55,6 +56,7 @@ app.use('/api/admin', adminContentRouter);
 app.use('/api/admin', adminMonitoringRouter);
 app.use('/api/community', communityRouter);
 app.use('/api/profile', profileRouter);
+app.use('/api/tabletop', tabletopRouter);
 app.use('/api/wiki', wikiRouter);
 app.use('/api/admin', wikiAdminRouter);
 app.use('/api/protected', protectedRoutes);
