@@ -86,6 +86,38 @@ function normalizeOptionalText(value, maxLength = 300) {
   return text;
 }
 
+function estimateDataUrlBytes(dataUrl) {
+  if (typeof dataUrl !== 'string') return 0;
+  const trimmed = dataUrl.trim();
+  const match = /^data:([^;]+);base64,(.*)$/i.exec(trimmed);
+  if (!match) return 0;
+  const base64 = match[2] || '';
+  const normalizedLen = base64.replace(/\s+/g, '').length;
+  if (!normalizedLen) return 0;
+  const padding = base64.endsWith('==') ? 2 : (base64.endsWith('=') ? 1 : 0);
+  return Math.max(0, Math.floor((normalizedLen * 3) / 4) - padding);
+}
+
+function validateCharacterNotesSoftLimits(notes) {
+  if (typeof notes !== 'string') return;
+  const trimmed = notes.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return;
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    const portrait = parsed?.sheet?.portrait;
+    if (typeof portrait === 'string' && /^data:image\/[a-z0-9.+-]+;base64,/i.test(portrait)) {
+      const bytes = estimateDataUrlBytes(portrait);
+      if (bytes > 2 * 1024 * 1024) {
+        throw createHttpError(400, 'Portrait payload is too large');
+      }
+    }
+  } catch (error) {
+    if (error?.statusCode) throw error;
+    // If notes is not valid JSON, treat it as plain text (backward compatible).
+  }
+}
+
 function normalizeCharacterPayload(data) {
   const payload = data && typeof data === 'object' ? data : {};
   const name = String(payload.name || '').trim();
@@ -95,7 +127,7 @@ function normalizeCharacterPayload(data) {
   const level = Number(payload.level);
   const campaignName = normalizeOptionalText(payload.campaignName, 180);
   const background = normalizeOptionalText(payload.background, 300);
-  const notes = normalizeOptionalText(payload.notes, 3 * 1024 * 1024);
+  const notes = normalizeOptionalText(payload.notes, 10 * 1024 * 1024);
   const statusRaw = String(payload.status || 'active').trim().toLowerCase();
   const status = statusRaw === 'archived' ? 'archived' : 'active';
 
@@ -120,6 +152,8 @@ function normalizeCharacterPayload(data) {
   if (!Number.isInteger(level) || level < 1 || level > 20) {
     throw createHttpError(400, 'Level must be an integer between 1 and 20');
   }
+
+  validateCharacterNotesSoftLimits(notes);
 
   return {
     name,

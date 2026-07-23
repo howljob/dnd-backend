@@ -1,3 +1,4 @@
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const env = require('./config/env');
@@ -21,6 +22,8 @@ const {
   wikiRouter,
   wikiAdminRouter
 } = require('./modules/wiki/wiki.routes');
+const wikiReferenceRouter = require('./modules/wiki-reference/wiki-reference.routes');
+const tabletopRouter = require('./modules/tabletop/tabletop.routes');
 const protectedRoutes = require('./routes/protected.routes');
 
 const app = express();
@@ -43,6 +46,7 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: '12mb' }));
+app.use('/uploads/vtt', express.static(path.join(__dirname, '..', 'uploads', 'vtt')));
 app.use('/api/auth', authRoutes);
 app.use('/api/game-types', gameTypesRouter);
 app.use('/api/games', gamesRouter);
@@ -57,6 +61,8 @@ app.use('/api/community', communityRouter);
 app.use('/api/profile', profileRouter);
 app.use('/api/wiki', wikiRouter);
 app.use('/api/admin', wikiAdminRouter);
+app.use('/api', wikiReferenceRouter);
+app.use('/api', tabletopRouter);
 app.use('/api/protected', protectedRoutes);
 
 app.get('/health', (req, res) => {
