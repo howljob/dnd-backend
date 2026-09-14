@@ -31,12 +31,19 @@ const allowedOrigins = Array.from(new Set([
   'http://localhost:3000',
   'http://localhost:8000',
   'http://127.0.0.1:8000',
-  env.frontendUrl
+  env.frontendUrl,
+  ...env.corsOrigins
 ].filter(Boolean)));
+
+// Вне продакшена фронт может жить на любом локальном порту (параллельные треки: 8100, 8200, ...).
+const LOCAL_ORIGIN = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/;
 
 app.use(cors({
   origin(origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    if (env.nodeEnv !== 'production' && LOCAL_ORIGIN.test(origin)) {
       return callback(null, true);
     }
 

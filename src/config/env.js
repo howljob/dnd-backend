@@ -10,6 +10,8 @@ module.exports = {
   pgUser: process.env.PGUSER,
   pgPassword: process.env.PGPASSWORD,
   frontendUrl: process.env.FRONTEND_URL || 'http://127.0.0.1:8000',
+  // Дополнительные origin для CORS через запятую (например, второй домен на проде)
+  corsOrigins: (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
   jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
   jwtAccessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '7d'
 };
