@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon src/server.js",
+    "test": "node --test",
     "start": "node src/server.js",
     "migrate:create": "node scripts/migrate.js create --migration-filename-format timestamp",
     "migrate:up": "node scripts/migrate.js up",
