@@ -10,8 +10,9 @@
     "migrate:up": "node-pg-migrate up --config-file migration-config.json --config-value db",
     "migrate:down": "node-pg-migrate down --config-file migration-config.json --config-value db",
     "admin:promote": "node src/scripts/promote-admin.js",
-    "wiki:import-srd": "node src/scripts/import-wiki-srd.js",
-    "wiki:import-reference": "node src/scripts/import-wiki-reference.js"
+    "wiki:import-reference": "node src/scripts/import-wiki-reference.js",
+    "wiki:build-sources": "node src/scripts/build-wiki-trimmed-sources.js",
+    "wiki:selftest": "node src/scripts/import-wiki-reference.selftest.js"
   },
   "keywords": [],
   "author": "",

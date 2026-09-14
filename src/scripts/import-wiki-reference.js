@@ -24,11 +24,18 @@ function slugify(value, fallback) {
   return normalized || fallback;
 }
 
+/**
+ * ВАЖНО: в JS «\b» не работает на кириллице (граница слова определяется только
+ * по [A-Za-z0-9_]), поэтому старые регэкспы вида /\bКомментарии\b/ не находили
+ * секцию комментариев dnd.su и в контент классов попадало ~3400 строк мусора.
+ * Обрезаем по началу строки: строка целиком «Комментарии» (или заголовок
+ * «## Комментарии») и всё после неё удаляются.
+ */
 function sanitizeText(value) {
   return String(value || '')
     .replace(/https?:\/\/5e14\.dnd\.su[^\s)"']*/gi, '')
     .replace(/window\.commentsAccess\s*=\s*\{[\s\S]*$/i, '')
-    .replace(/\bКомментарии\b[\s\S]*$/i, '')
+    .replace(/(^|\n)[ \t]*#{0,6}[ \t]*Комментарии[ \t]*(?=\n|$)[\s\S]*$/, '$1')
     .replace(/\s{2,}/g, ' ')
     .trim();
 }
@@ -39,7 +46,8 @@ function sanitizeWikiMarkdown(value) {
     .replace(/^\uFEFF/, '')
     .replace(/https?:\/\/5e14\.dnd\.su[^\s)"']*/gi, '')
     .replace(/window\.commentsAccess\s*=\s*\{[\s\S]*$/i, '')
-    .replace(/\bКомментарии\b[\s\S]*$/i, '')
+    .replace(/(^|\n)[ \t]{0,3}#{0,6}[ \t]*Комментарии[ \t]*(?=\n|$)[\s\S]*$/, '$1')
+    .replace(/(^|\n)[ \t]{0,3}#{1,6}[ \t]*Галерея[ \t]*(?=\n|$)[\s\S]*$/, '$1')
     .replace(/[ \t]+\n/g, '\n')
     .trim();
 }
@@ -213,8 +221,9 @@ function trimMarkdownPreamble(md) {
 
 function parseNameFromMarkdown(md) {
   const lines = String(md || '').split(/\r?\n/);
-  for (const line of lines) {
-    const t = line.trim();
+  for (const rawLine of lines) {
+    // «## Варвар \[Barbarian\]» → «## Варвар [Barbarian]»
+    const t = rawLine.trim().replace(/\\([[\]])/g, '$1');
     const mBracket = t.match(/^##\s+(.+?)\s*\[(.+?)\]\s*$/);
     if (mBracket) {
       return { name: sanitizeText(mBracket[1]), nameEn: sanitizeText(mBracket[2]) };
@@ -245,6 +254,85 @@ function parseSourceFromMarkdown(md) {
   return sanitizeText(m?.[1] || '');
 }
 
+/**
+ * Разбор структуры классового .md для оглавления на фронте.
+ * Возвращает { toc, levelTable, features, subclasses }:
+ *  - toc: все H2 (+H3-умения) с классификацией kind:
+ *      main       — «## Варвар [Barbarian]» (основной заголовок)
+ *      features   — «## Классовые умения»
+ *      feature    — H3-умение внутри «Классовых умений» («### ЯРОСТЬ»)
+ *      group      — заголовок-группа («## Пути дикости», «## Unearthed Arcana…»)
+ *      subclass   — конкретный подкласс («## Путь берсерка»)
+ *      section    — прочие разделы («## Углублённая предыстория…»)
+ *  - levelTable: markdown первой GFM-таблицы, в шапке которой есть «Уровень»
+ *    (таблица уровней класса).
+ * Внимание: «\b» с кириллицей в JS не работает — ключевые слова ищем как
+ * подстроки во множественном числе («домены», «архетипы»), единственное число
+ * в названиях подклассов («Домен бури») под них не попадает.
+ */
+const CLASS_GROUP_RE = /(unearthed arcana|homebrew|из «|пути дикости|домены|традиции|покровители|специализации|коллегии|архетипы|клятвы|происхождения|круги|воззвания|инфузии|заветы)/i;
+
+function parseClassStructure(md) {
+  const lines = String(md || '').split(/\r?\n/);
+  const toc = [];
+  let mainSeen = false;
+  let inFeatures = false;
+  let groupSeen = false;
+
+  // Таблица уровней: первая GFM-таблица, где в первой строке есть «Уровень».
+  let levelTable = '';
+  for (let i = 0; i < lines.length; i += 1) {
+    const t = lines[i].trim();
+    if (!levelTable && t.startsWith('|') && /Уровень/i.test(t)) {
+      const block = [];
+      let j = i;
+      while (j < lines.length && lines[j].trim().startsWith('|')) {
+        block.push(lines[j].trimEnd());
+        j += 1;
+      }
+      if (block.length >= 3) {
+        levelTable = block.join('\n');
+      }
+    }
+  }
+
+  for (const raw of lines) {
+    const t = raw.trim();
+    if (t.startsWith('### ')) {
+      if (inFeatures) {
+        toc.push({ level: 3, title: t.slice(4).trim(), kind: 'feature' });
+      }
+      continue;
+    }
+    if (!t.startsWith('## ')) continue;
+
+    const title = t.slice(3).trim();
+    if (!title) continue;
+
+    let kind = 'section';
+    if (!mainSeen && title.includes('[')) {
+      kind = 'main';
+      mainSeen = true;
+    } else if (/^классовые умения/i.test(title)) {
+      kind = 'features';
+    } else if (CLASS_GROUP_RE.test(title)) {
+      kind = 'group';
+      groupSeen = true;
+    } else if (groupSeen) {
+      kind = 'subclass';
+    }
+    inFeatures = kind === 'features';
+    toc.push({ level: 2, title, kind });
+  }
+
+  return {
+    toc,
+    levelTable,
+    features: toc.filter((e) => e.kind === 'feature').map((e) => e.title),
+    subclasses: toc.filter((e) => e.kind === 'subclass').map((e) => e.title)
+  };
+}
+
 function parseMarkdownWikiEntry(section, slug, rawMd) {
   const trimmed = trimMarkdownPreamble(rawMd);
   const { name, nameEn } = parseNameFromMarkdown(trimmed);
@@ -258,6 +346,14 @@ function parseMarkdownWikiEntry(section, slug, rawMd) {
     source
   });
 
+  const payload = {
+    slugFile: slug,
+    contentFormat: 'markdown'
+  };
+  if (section === 'classes') {
+    payload.sections = parseClassStructure(content);
+  }
+
   return {
     slug: slugify(slug, slug),
     name: baseName,
@@ -266,10 +362,7 @@ function parseMarkdownWikiEntry(section, slug, rawMd) {
     summary: summary || firstSentence(content),
     content,
     filters,
-    payload: {
-      slugFile: slug,
-      contentFormat: 'markdown'
-    }
+    payload
   };
 }
 
@@ -312,12 +405,56 @@ function resolveSectionFilePath(config) {
     }
   }
 
+  // Бестиарий и предметы: урезанные датасеты в assets/wiki (см.
+  // build-wiki-trimmed-sources.js) — единственный источник в git; сырые дампы
+  // из output/ используются только как fallback вне worktree-ов.
+  if (config.section === 'bestiary') {
+    const trimmedPath = path.join(ASSETS_WIKI_DIR, 'bestiary', 'bestiary-all.json');
+    if (fs.existsSync(trimmedPath)) {
+      return { kind: 'trimmed-json', filePath: trimmedPath };
+    }
+  }
+
+  if (config.section === 'items') {
+    const trimmedPath = path.join(ASSETS_WIKI_DIR, 'items', 'items-all.json');
+    if (fs.existsSync(trimmedPath)) {
+      return { kind: 'trimmed-json', filePath: trimmedPath };
+    }
+  }
+
   const outputPath = path.join(OUTPUT_DIR, config.file);
   if (fs.existsSync(outputPath)) {
     return { kind: 'json-array', filePath: outputPath };
   }
 
   return null;
+}
+
+/**
+ * Записи урезанных датасетов (bestiary-all.json / items-all.json) уже
+ * нормализованы при сборке: надёжные slug и имена (см. известный дефект
+ * name_ru в build-wiki-trimmed-sources.js), очищенное описание, готовые
+ * фильтры. Здесь только досанитизация и упаковка.
+ */
+function normalizeTrimmedRow(section, row) {
+  const content = sanitizeWikiMarkdown(row?.description || '');
+  const source = sanitizeText(row?.source || '');
+  const filters = { source };
+  for (const [key, value] of Object.entries(row?.filters || {})) {
+    const clean = sanitizeText(value || '');
+    if (clean) filters[key] = clean;
+  }
+
+  return {
+    slug: slugify(row?.slug, `${section}-${Math.random().toString(36).slice(2, 10)}`),
+    name: sanitizeText(row?.name || '') || String(row?.slug || ''),
+    nameEn: sanitizeText(row?.name_en || ''),
+    source,
+    summary: firstSentence(sanitizeText(content.slice(0, 4000))),
+    content,
+    filters,
+    payload: { contentFormat: 'markdown', importedFrom: 'trimmed-json' }
+  };
 }
 
 function normalizeFromAssetsIndex(section, item, mdContent) {
@@ -344,6 +481,33 @@ function normalizeFromAssetsIndex(section, item, mdContent) {
   };
 }
 
+async function upsertEntry(client, table, slug, normalized) {
+  await client.query(
+    `INSERT INTO ${table} (slug, name, name_en, source, summary, content, filters, payload)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     ON CONFLICT (slug)
+     DO UPDATE
+     SET name = EXCLUDED.name,
+         name_en = EXCLUDED.name_en,
+         source = EXCLUDED.source,
+         summary = EXCLUDED.summary,
+         content = EXCLUDED.content,
+         filters = EXCLUDED.filters,
+         payload = EXCLUDED.payload,
+         updated_at = now()`,
+    [
+      slug,
+      normalized.name,
+      normalized.nameEn,
+      normalized.source,
+      normalized.summary,
+      normalized.content,
+      normalized.filters,
+      normalized.payload
+    ]
+  );
+}
+
 async function importSection(client, config) {
   const resolved = resolveSectionFilePath(config);
   if (!resolved) {
@@ -353,6 +517,23 @@ async function importSection(client, config) {
   await client.query(`TRUNCATE ${config.table} RESTART IDENTITY;`);
 
   let imported = 0;
+
+  if (resolved.kind === 'trimmed-json') {
+    const rows = parseJsonFile(resolved.filePath);
+    if (!Array.isArray(rows)) {
+      throw new Error(`Invalid JSON structure in ${resolved.filePath}`);
+    }
+
+    for (const raw of rows) {
+      const normalized = normalizeTrimmedRow(config.section, raw);
+      if (!normalized.content) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await upsertEntry(client, config.table, normalized.slug, normalized);
+      imported += 1;
+    }
+
+    return imported;
+  }
 
   if (resolved.kind === 'json-array') {
     const rows = parseJsonFile(resolved.filePath);
@@ -367,30 +548,7 @@ async function importSection(client, config) {
       const slug = `${normalized.slug}-${index + 1}`;
 
       // eslint-disable-next-line no-await-in-loop
-      await client.query(
-        `INSERT INTO ${config.table} (slug, name, name_en, source, summary, content, filters, payload)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (slug)
-         DO UPDATE
-         SET name = EXCLUDED.name,
-             name_en = EXCLUDED.name_en,
-             source = EXCLUDED.source,
-             summary = EXCLUDED.summary,
-             content = EXCLUDED.content,
-             filters = EXCLUDED.filters,
-             payload = EXCLUDED.payload,
-             updated_at = now()`,
-        [
-          slug,
-          normalized.name,
-          normalized.nameEn,
-          normalized.source,
-          normalized.summary,
-          normalized.content,
-          normalized.filters,
-          normalized.payload
-        ]
-      );
+      await upsertEntry(client, config.table, slug, normalized);
       imported += 1;
     }
 
@@ -412,30 +570,7 @@ async function importSection(client, config) {
       const normalized = parseMarkdownWikiEntry(config.section, slug, md);
 
       // eslint-disable-next-line no-await-in-loop
-      await client.query(
-        `INSERT INTO ${config.table} (slug, name, name_en, source, summary, content, filters, payload)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (slug)
-         DO UPDATE
-         SET name = EXCLUDED.name,
-             name_en = EXCLUDED.name_en,
-             source = EXCLUDED.source,
-             summary = EXCLUDED.summary,
-             content = EXCLUDED.content,
-             filters = EXCLUDED.filters,
-             payload = EXCLUDED.payload,
-             updated_at = now()`,
-        [
-          normalized.slug,
-          normalized.name,
-          normalized.nameEn,
-          normalized.source,
-          normalized.summary,
-          normalized.content,
-          normalized.filters,
-          normalized.payload
-        ]
-      );
+      await upsertEntry(client, config.table, normalized.slug, normalized);
       imported += 1;
     }
 
@@ -457,30 +592,7 @@ async function importSection(client, config) {
       const normalized = normalizeFromAssetsIndex(config.section, item, md);
 
       // eslint-disable-next-line no-await-in-loop
-      await client.query(
-        `INSERT INTO ${config.table} (slug, name, name_en, source, summary, content, filters, payload)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (slug)
-         DO UPDATE
-         SET name = EXCLUDED.name,
-             name_en = EXCLUDED.name_en,
-             source = EXCLUDED.source,
-             summary = EXCLUDED.summary,
-             content = EXCLUDED.content,
-             filters = EXCLUDED.filters,
-             payload = EXCLUDED.payload,
-             updated_at = now()`,
-        [
-          normalized.slug,
-          normalized.name,
-          normalized.nameEn,
-          normalized.source,
-          normalized.summary,
-          normalized.content,
-          normalized.filters,
-          normalized.payload
-        ]
-      );
+      await upsertEntry(client, config.table, normalized.slug, normalized);
       imported += 1;
     }
 
@@ -516,4 +628,17 @@ async function run() {
   }
 }
 
-run();
+if (require.main === module) {
+  run();
+}
+
+// Экспорт для юнит-проверки (src/scripts/import-wiki-reference.selftest.js).
+module.exports = {
+  sanitizeText,
+  sanitizeWikiMarkdown,
+  trimMarkdownPreamble,
+  parseNameFromMarkdown,
+  parseClassStructure,
+  parseMarkdownWikiEntry,
+  normalizeTrimmedRow
+};
