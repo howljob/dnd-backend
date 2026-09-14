@@ -7,8 +7,8 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "migrate:create": "node-pg-migrate create",
-    "migrate:up": "node-pg-migrate up --config-file migration-config.json --config-value db",
-    "migrate:down": "node-pg-migrate down --config-file migration-config.json --config-value db",
+    "migrate:up": "node-pg-migrate up --database-url postgres://postgres:postgres@localhost:55432/dnd_hub_t4 -m migrations",
+    "migrate:down": "node-pg-migrate down --database-url postgres://postgres:postgres@localhost:55432/dnd_hub_t4 -m migrations",
     "admin:promote": "node src/scripts/promote-admin.js",
     "wiki:import-srd": "node src/scripts/import-wiki-srd.js",
     "wiki:import-reference": "node src/scripts/import-wiki-reference.js"
