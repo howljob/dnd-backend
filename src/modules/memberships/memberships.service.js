@@ -1,5 +1,6 @@
 const pool = require('../../db/pool');
 const { recordActivityEvent } = require('../community/community-activity.service');
+const { createNotification } = require('../community/community-notifications.service');
 const ALLOWED_REQUESTED_ROLES = ['player', 'gm'];
 const DEFAULT_REQUESTED_ROLE = 'player';
 
@@ -10,11 +11,14 @@ const MEMBERSHIP_SELECT = `
     m.user_id,
     m.member_role,
     m.status,
+    m.application_message,
+    m.character_concept,
     m.created_at,
     m.updated_at,
     u.display_name AS user_display_name,
     u.role AS user_role,
     g.creator_id,
+    g.title AS game_title,
     g.max_players,
     gs.slug AS game_status_slug
   FROM game_memberships m
@@ -49,11 +53,32 @@ function validateRequestedRole(data) {
   return rawRequestedRole || DEFAULT_REQUESTED_ROLE;
 }
 
+function validateOptionalText(value, fieldName, maxLength) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
+  if (typeof value !== 'string') {
+    throw createHttpError(400, `Invalid ${fieldName}`);
+  }
+
+  const trimmed = value.trim();
+
+  if (trimmed.length > maxLength) {
+    throw createHttpError(400, `${fieldName} is too long`);
+  }
+
+  return trimmed || null;
+}
+
 function mapMembershipRow(row) {
   return {
     id: row.id,
+    gameId: row.game_id,
     memberRole: row.member_role,
     status: row.status,
+    message: row.application_message || '',
+    characterConcept: row.character_concept || '',
     user: {
       id: row.user_id,
       displayName: row.user_display_name,
@@ -86,6 +111,7 @@ async function getGameForMemberships(gameId) {
     `SELECT
       g.id,
       g.creator_id,
+      g.title,
       g.max_players,
       gs.slug AS status_slug
     FROM games g
@@ -214,13 +240,16 @@ async function joinGame(auth, gameId, data) {
   }
 
   const memberRole = validateRequestedRole(data);
+  const payload = data && typeof data === 'object' ? data : {};
+  const applicationMessage = validateOptionalText(payload.message, 'message', 2000);
+  const characterConcept = validateOptionalText(payload.characterConcept, 'characterConcept', 500);
 
   try {
     const insertResult = await pool.query(
-      `INSERT INTO game_memberships (game_id, user_id, member_role, status)
-      VALUES ($1, $2, $3, 'pending')
+      `INSERT INTO game_memberships (game_id, user_id, member_role, status, application_message, character_concept)
+      VALUES ($1, $2, $3, 'pending', $4, $5)
       RETURNING id`,
-      [gameId, auth.userId, memberRole]
+      [gameId, auth.userId, memberRole, applicationMessage, characterConcept]
     );
 
     const membership = await getMembershipById(insertResult.rows[0].id);
@@ -233,6 +262,20 @@ async function joinGame(auth, gameId, data) {
         requestedRole: memberRole
       }
     });
+
+    // Уведомление мастеру (создателю игры) о новой заявке.
+    await createNotification({
+      userId: game.creator_id,
+      actorUserId: auth.userId,
+      type: 'game_join_requested',
+      entityType: 'game',
+      entityId: gameId,
+      payload: {
+        gameTitle: game.title,
+        requestedRole: memberRole
+      }
+    });
+
     return mapMembershipRow(membership);
   } catch (error) {
     if (error.code === '23505') {
@@ -308,6 +351,20 @@ async function approveMembership(auth, membershipId) {
       approvedBy: auth.userId
     }
   });
+
+  // Уведомление игроку: заявка одобрена.
+  await createNotification({
+    userId: membership.user_id,
+    actorUserId: auth.userId,
+    type: 'game_join_approved',
+    entityType: 'game',
+    entityId: membership.game_id,
+    payload: {
+      gameTitle: membership.game_title,
+      approvedRole: membership.member_role
+    }
+  });
+
   return mapMembershipRow(updatedMembership);
 }
 
@@ -340,6 +397,18 @@ async function rejectMembership(auth, membershipId) {
     WHERE id = $1`,
     [membershipId]
   );
+
+  // Уведомление игроку: заявка отклонена.
+  await createNotification({
+    userId: membership.user_id,
+    actorUserId: auth.userId,
+    type: 'game_join_rejected',
+    entityType: 'game',
+    entityId: membership.game_id,
+    payload: {
+      gameTitle: membership.game_title
+    }
+  });
 
   const updatedMembership = await getMembershipById(membershipId);
   return mapMembershipRow(updatedMembership);
