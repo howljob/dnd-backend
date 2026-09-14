@@ -6,8 +6,12 @@ const ALLOWED_PLAYER_LEVELS = ['beginner', 'intermediate', 'advanced'];
 const ALLOWED_FORMATS = ['online', 'offline'];
 const ALLOWED_CREATOR_ROLES = ['player', 'gm'];
 const LEGACY_DEFAULT_CREATOR_ROLE = 'gm';
+const ALLOWED_KINDS = ['campaign', 'one_shot'];
+const TABLE_PROFILE_FIELDS = ['style', 'expectedDuration', 'newcomerThreshold', 'requirements'];
 const UPDATABLE_FIELDS = [
   'title',
+  'kind',
+  'tableProfile',
   'gameTypeId',
   'description',
   'startsAt',
@@ -34,6 +38,8 @@ const GAME_SELECT_BASE = `
     g.price_amount,
     g.format,
     g.location,
+    g.kind,
+    g.table_profile,
     g.created_at,
     g.updated_at,
     creator.id AS creator_id,
@@ -74,6 +80,8 @@ const GAME_GROUP_BY = `
     g.price_amount,
     g.format,
     g.location,
+    g.kind,
+    g.table_profile,
     g.created_at,
     g.updated_at,
     creator.id,
@@ -127,6 +135,8 @@ function mapGameRow(row) {
     priceAmount: normalizePrice(row.price_amount),
     format: row.format,
     location: row.location,
+    kind: row.kind || 'campaign',
+    tableProfile: row.table_profile && typeof row.table_profile === 'object' ? row.table_profile : {},
     creator: {
       id: row.creator_id,
       displayName: row.creator_display_name,
@@ -168,8 +178,60 @@ function mapGameRowToEditableData(row) {
     priceAmount: row.price_amount,
     format: row.format,
     location: row.location,
+    kind: row.kind,
+    tableProfile: row.table_profile,
     statusId: row.status_id
   };
+}
+
+function normalizeKind(value) {
+  if (value === null || value === undefined || value === '') {
+    return 'campaign';
+  }
+
+  const kind = typeof value === 'string' ? value.trim().toLowerCase() : '';
+
+  if (!ALLOWED_KINDS.includes(kind)) {
+    throw createHttpError(400, 'Invalid kind');
+  }
+
+  return kind;
+}
+
+// Анкета стола: стиль игры, ожидаемая длительность, порог для новичков, требования.
+// Храним только известные строковые поля, каждое не длиннее 500 символов.
+function normalizeTableProfile(value) {
+  if (value === null || value === undefined) {
+    return {};
+  }
+
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw createHttpError(400, 'Invalid tableProfile');
+  }
+
+  return TABLE_PROFILE_FIELDS.reduce((result, field) => {
+    const fieldValue = value[field];
+
+    if (fieldValue === null || fieldValue === undefined) {
+      return result;
+    }
+
+    if (typeof fieldValue !== 'string') {
+      throw createHttpError(400, `Invalid tableProfile.${field}`);
+    }
+
+    const trimmed = fieldValue.trim();
+
+    if (trimmed.length > 500) {
+      throw createHttpError(400, `tableProfile.${field} is too long`);
+    }
+
+    if (trimmed) {
+      result[field] = trimmed;
+    }
+
+    return result;
+  }, {});
 }
 
 function pickUpdatableFields(data) {
@@ -288,6 +350,8 @@ function validateGameData(data, options = {}) {
     priceAmount,
     format,
     location,
+    kind: normalizeKind(payload.kind),
+    tableProfile: normalizeTableProfile(payload.tableProfile),
     creatorRole,
     statusId: options.requireStatusId ? statusId : null
   };
@@ -399,9 +463,11 @@ async function createGame(auth, data) {
         price_amount,
         format,
         location,
+        kind,
+        table_profile,
         status_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       RETURNING id`,
       [
         auth.userId,
@@ -416,6 +482,8 @@ async function createGame(auth, data) {
         validatedData.priceAmount,
         validatedData.format,
         validatedData.location,
+        validatedData.kind,
+        validatedData.tableProfile,
         activeStatus.id
       ]
     );
@@ -477,6 +545,8 @@ async function updateGame(auth, id, data) {
       price_amount,
       format,
       location,
+      kind,
+      table_profile,
       status_id
     FROM games
     WHERE id = $1
@@ -526,7 +596,9 @@ async function updateGame(auth, id, data) {
       price_amount = $10,
       format = $11,
       location = $12,
-      status_id = $13,
+      kind = $13,
+      table_profile = $14,
+      status_id = $15,
       updated_at = now()
     WHERE id = $1`,
     [
@@ -542,6 +614,8 @@ async function updateGame(auth, id, data) {
       validatedData.priceAmount,
       validatedData.format,
       validatedData.location,
+      validatedData.kind,
+      validatedData.tableProfile,
       validatedData.statusId
     ]
   );
