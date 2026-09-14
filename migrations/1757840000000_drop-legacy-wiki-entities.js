@@ -1,24 +1,69 @@
-// T7.2: legacy-модуль src/modules/wiki (включая wiki.seed.js) удалён.
-// Таблицы этой миграции дропаются следующей за ней миграцией
-// 1757840000000_drop-legacy-wiki-entities, поэтому на свежей базе сид
-// больше не нужен: без файла сида создаём таблицы пустыми.
-let SRD_SEED_ENTITIES = [];
-let SRD_SEED_RELATIONS = [];
-try {
-  // eslint-disable-next-line global-require
-  ({ SRD_SEED_ENTITIES, SRD_SEED_RELATIONS } = require('../src/modules/wiki/wiki.seed'));
-} catch {
-  /* сид удалён — таблицы создаются пустыми */
-}
+/**
+ * T7.2 — один источник правды для вики.
+ *
+ * up:
+ *  1. Дропает legacy-таблицы модуля wiki (wiki_entities + связанные):
+ *     контент полностью живёт в семи таблицах wiki_* модуля wiki-reference.
+ *  2. Добавляет таблицам wiki_* колонку is_published (boolean, default true)
+ *     и полнотекстовый GIN-индекс по name + name_en + content для поиска.
+ *
+ * down: восстанавливает СТРУКТУРУ legacy-таблиц по 000015 (без данных —
+ * сид удалён вместе с модулем) и убирает is_published/FTS-индексы.
+ */
 
-function sqlString(value) {
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
+const REFERENCE_TABLES = [
+  'wiki_spells',
+  'wiki_classes',
+  'wiki_races',
+  'wiki_backgrounds',
+  'wiki_feats',
+  'wiki_bestiary',
+  'wiki_items'
+];
 
 /**
  * @param {import('node-pg-migrate').MigrationBuilder} pgm
  */
 exports.up = (pgm) => {
+  // 1. Legacy-таблицы: порядок — сначала зависимые (FK на wiki_entities).
+  pgm.sql('DROP INDEX IF EXISTS wiki_translations_fts_idx;');
+  pgm.dropTable('wiki_entity_relations', { ifExists: true });
+  pgm.dropTable('wiki_entity_stats', { ifExists: true });
+  pgm.dropTable('wiki_entity_translations', { ifExists: true });
+  pgm.dropTable('wiki_entities', { ifExists: true });
+
+  // 2. Недостающее таблицам wiki-reference.
+  for (const tableName of REFERENCE_TABLES) {
+    pgm.addColumn(tableName, {
+      is_published: {
+        type: 'boolean',
+        notNull: true,
+        default: true
+      }
+    });
+    pgm.sql(`
+      CREATE INDEX ${tableName}_fts_idx
+      ON ${tableName}
+      USING GIN (
+        to_tsvector(
+          'simple',
+          coalesce(name, '') || ' ' || coalesce(name_en, '') || ' ' || coalesce(content, '')
+        )
+      );
+    `);
+  }
+};
+
+/**
+ * @param {import('node-pg-migrate').MigrationBuilder} pgm
+ */
+exports.down = (pgm) => {
+  for (const tableName of REFERENCE_TABLES) {
+    pgm.sql(`DROP INDEX IF EXISTS ${tableName}_fts_idx;`);
+    pgm.dropColumn(tableName, 'is_published');
+  }
+
+  // Структура legacy-таблиц из 000015 — без сид-данных.
   pgm.createTable('wiki_entities', {
     id: {
       type: 'uuid',
@@ -55,12 +100,7 @@ exports.up = (pgm) => {
     }
   });
 
-  pgm.addConstraint(
-    'wiki_entities',
-    'wiki_entities_slug_unique',
-    'UNIQUE (slug)'
-  );
-
+  pgm.addConstraint('wiki_entities', 'wiki_entities_slug_unique', 'UNIQUE (slug)');
   pgm.addConstraint(
     'wiki_entities',
     'wiki_entities_type_check',
@@ -114,7 +154,6 @@ exports.up = (pgm) => {
     'wiki_entity_translations_locale_check',
     "CHECK (locale IN ('ru', 'en'))"
   );
-
   pgm.addConstraint(
     'wiki_entity_translations',
     'wiki_entity_translations_unique_entity_locale',
@@ -207,64 +246,4 @@ exports.up = (pgm) => {
       )
     );
   `);
-
-  for (const entity of SRD_SEED_ENTITIES) {
-    pgm.sql(
-      `INSERT INTO wiki_entities (slug, entity_type, source, is_published)
-       VALUES (${sqlString(entity.slug)}, ${sqlString(entity.entityType)}, 'srd-5e', true);`
-    );
-
-    pgm.sql(
-      `INSERT INTO wiki_entity_stats (wiki_entity_id, stats)
-       SELECT id, ${sqlString(JSON.stringify(entity.stats || {}))}::jsonb
-       FROM wiki_entities
-       WHERE slug = ${sqlString(entity.slug)}
-       LIMIT 1;`
-    );
-
-    for (const locale of Object.keys(entity.translations || {})) {
-      const translation = entity.translations[locale];
-      pgm.sql(
-        `INSERT INTO wiki_entity_translations (
-          wiki_entity_id,
-          locale,
-          name,
-          summary,
-          body
-        )
-        SELECT
-          id,
-          ${sqlString(locale)},
-          ${sqlString(translation.name || '')},
-          ${sqlString(translation.summary || '')},
-          ${sqlString(JSON.stringify(translation.body || {}))}::jsonb
-        FROM wiki_entities
-        WHERE slug = ${sqlString(entity.slug)}
-        LIMIT 1;`
-      );
-    }
-  }
-
-  for (const relation of SRD_SEED_RELATIONS) {
-    pgm.sql(
-      `INSERT INTO wiki_entity_relations (from_entity_id, to_entity_id, relation_type)
-       SELECT from_entity.id, to_entity.id, ${sqlString(relation.relationType)}
-       FROM wiki_entities from_entity
-       CROSS JOIN wiki_entities to_entity
-       WHERE from_entity.slug = ${sqlString(relation.fromSlug)}
-         AND to_entity.slug = ${sqlString(relation.toSlug)}
-       LIMIT 1;`
-    );
-  }
-};
-
-/**
- * @param {import('node-pg-migrate').MigrationBuilder} pgm
- */
-exports.down = (pgm) => {
-  pgm.sql('DROP INDEX IF EXISTS wiki_translations_fts_idx;');
-  pgm.dropTable('wiki_entity_relations');
-  pgm.dropTable('wiki_entity_stats');
-  pgm.dropTable('wiki_entity_translations');
-  pgm.dropTable('wiki_entities');
 };
