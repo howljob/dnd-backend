@@ -164,6 +164,7 @@ function attachTabletopWs(httpServer) {
             source: msg.source,
             target: msg.target,
             detail: msg.detail,
+            character: msg.character,
             spellLevel: msg.spellLevel,
             rolls: msg.rolls
           });

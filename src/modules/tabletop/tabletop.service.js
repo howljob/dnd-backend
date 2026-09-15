@@ -669,6 +669,8 @@ async function createActionEvent(auth, gameId, data) {
 
   const target = normalizeShortText(payload.target, 120);
   const detail = normalizeShortText(payload.detail, 500);
+  // Имя персонажа, от лица которого совершается действие (для строки в ленте).
+  const character = normalizeShortText(payload.character, 120);
 
   let spellLevel = null;
   if (payload.spellLevel !== undefined && payload.spellLevel !== null && payload.spellLevel !== '') {
@@ -707,6 +709,7 @@ async function createActionEvent(auth, gameId, data) {
       source,
       target: target || null,
       detail: detail || null,
+      character: character || null,
       spellLevel,
       rolls
     },
