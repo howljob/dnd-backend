@@ -244,6 +244,7 @@ async function getPersonalGames(auth) {
       g.title,
       g.starts_at,
       g.created_at,
+      g.kind,
       gt.name AS game_type_name,
       gt.slug AS game_type_slug,
       gs.slug AS status_slug,
@@ -271,6 +272,7 @@ async function getPersonalGames(auth) {
   return result.rows.map((row) => ({
     id: row.id,
     title: row.title,
+    kind: row.kind || 'campaign',
     system: row.game_type_name || 'TTRPG',
     systemSlug: row.game_type_slug || 'other',
     memberRole: row.member_role,

@@ -11,6 +11,10 @@ const {
   gameMembershipsRouter,
   membershipActionsRouter
 } = require('./modules/memberships/memberships.routes');
+const {
+  gameSessionsRouter,
+  sessionActionsRouter
+} = require('./modules/sessions/sessions.routes');
 const adminUsersRouter = require('./modules/admin-users/admin-users.routes');
 const adminGamesRouter = require('./modules/admin-games/admin-games.routes');
 const adminMembershipsRouter = require('./modules/admin-memberships/admin-memberships.routes');
@@ -59,6 +63,8 @@ app.use('/api/game-types', gameTypesRouter);
 app.use('/api/games', gamesRouter);
 app.use('/api/games', gameMembershipsRouter);
 app.use('/api/game-memberships', membershipActionsRouter);
+app.use('/api/games', gameSessionsRouter);
+app.use('/api/sessions', sessionActionsRouter);
 app.use('/api/admin', adminUsersRouter);
 app.use('/api/admin', adminGamesRouter);
 app.use('/api/admin', adminMembershipsRouter);
