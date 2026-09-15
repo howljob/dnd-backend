@@ -404,6 +404,60 @@ function parseClassStructure(md) {
   };
 }
 
+/**
+ * T5.5 — машиночитаемая мета класса для листа персонажа и мастера создания
+ * (payload.meta). Разбирает блок «Хиты, владение и снаряжение» классового .md:
+ * кость хитов, формулы хитов, владения (доспехи/оружие/инструменты),
+ * спасброски, навыки и стартовое снаряжение. payload.sections (оглавление
+ * страницы вики) не трогаем.
+ */
+function parseClassMeta(content) {
+  const text = String(content || '');
+  const pickLine = (label) => {
+    const re = new RegExp(`\\*\\*${label}:?\\*\\*:?\\s*([^\\n]+)`, 'i');
+    const match = text.match(re);
+    return match ? sanitizeText(match[1]) : '';
+  };
+
+  const hitDiceRaw = pickLine('Кость Хитов');
+  // «1к12 за каждый уровень варвара» → «1к12» → «1d12» (формат селекта листа)
+  const hitDiceMatch = hitDiceRaw.match(/1\s*[кkd]\s*(\d+)/i);
+  const hitDice = hitDiceMatch ? `1d${hitDiceMatch[1]}` : '';
+
+  const meta = {
+    hitDice,
+    hitDiceRaw,
+    hpAtFirstLevel: pickLine('Хиты на 1 уровне'),
+    hpAtHigherLevels: pickLine('Хиты на следующих уровнях'),
+    armor: pickLine('Доспехи'),
+    weapons: pickLine('Оружие'),
+    tools: pickLine('Инструменты'),
+    savingThrows: pickLine('Спасброски'),
+    skills: pickLine('Навыки'),
+    startingEquipment: []
+  };
+
+  // Стартовое снаряжение: маркированный список после заголовка «СНАРЯЖЕНИЕ».
+  const equipHeading = text.search(/#{3,5}\s*СНАРЯЖЕНИЕ/i);
+  if (equipHeading !== -1) {
+    const tail = text.slice(equipHeading).split(/\r?\n/).slice(1);
+    for (const raw of tail) {
+      const line = raw.trim();
+      if (/^#{2,6}\s/.test(line)) break; // следующий раздел
+      if (/^\*\s+/.test(line)) {
+        meta.startingEquipment.push(sanitizeText(line.replace(/^\*\s+/, '')));
+        continue;
+      }
+      if (meta.startingEquipment.length && line && !/^\*/.test(line) && !/^Вы начинаете|^Если вы/i.test(line)) {
+        break;
+      }
+    }
+    meta.startingEquipment = meta.startingEquipment.slice(0, 12);
+  }
+
+  return meta;
+}
+
 function parseMarkdownWikiEntry(section, slug, rawMd) {
   const trimmed = trimMarkdownPreamble(rawMd);
   const { name, nameEn } = parseNameFromMarkdown(trimmed);
@@ -423,6 +477,12 @@ function parseMarkdownWikiEntry(section, slug, rawMd) {
   };
   if (section === 'classes') {
     payload.sections = parseClassStructure(content);
+    payload.meta = parseClassMeta(content);
+    // Дозаполняем filters из меты: для md-классов params_json пуст и
+    // hit_dice/armor/weapons раньше оставались пустыми строками.
+    if (!filters.hit_dice && payload.meta.hitDiceRaw) filters.hit_dice = payload.meta.hitDiceRaw;
+    if (!filters.armor && payload.meta.armor) filters.armor = payload.meta.armor;
+    if (!filters.weapons && payload.meta.weapons) filters.weapons = payload.meta.weapons;
   }
 
   return {
@@ -711,6 +771,7 @@ module.exports = {
   trimMarkdownPreamble,
   parseNameFromMarkdown,
   parseClassStructure,
+  parseClassMeta,
   parseMarkdownWikiEntry,
   normalizeTrimmedRow
 };
