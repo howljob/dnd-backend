@@ -23,6 +23,7 @@ const adminMonitoringRouter = require('./modules/admin-monitoring/admin-monitori
 const communityRouter = require('./modules/community/community.routes');
 const profileRouter = require('./modules/profile/profile.routes');
 const wikiReferenceRouter = require('./modules/wiki-reference/wiki-reference.routes');
+const gameCharactersRouter = require('./modules/game-characters/game-characters.routes');
 const tabletopRouter = require('./modules/tabletop/tabletop.routes');
 const protectedRoutes = require('./routes/protected.routes');
 
@@ -52,8 +53,16 @@ app.use(cors({
   credentials: true
 }));
 
-app.use(express.json({ limit: '12mb' }));
+// T5.2: портреты персонажей теперь файлы (multipart, uploads/portraits) —
+// глобальный лимит JSON возвращён к 1mb. Исключения ниже: data-URL всё ещё
+// шлют вложения постов сообщества (до 4×2МБ, убрать в T8) и аватар профиля
+// (до 2МБ, переезжает в файлы в T3.5). Их парсер стоит ПЕРЕД глобальным:
+// body-parser пропускает уже разобранное тело.
+app.use('/api/community', express.json({ limit: '12mb' }));
+app.use('/api/profile/me', express.json({ limit: '4mb' }));
+app.use(express.json({ limit: '1mb' }));
 app.use('/uploads/vtt', express.static(path.join(__dirname, '..', 'uploads', 'vtt')));
+app.use('/uploads/portraits', express.static(path.join(__dirname, '..', 'uploads', 'portraits')));
 app.use('/api/auth', authRoutes);
 app.use('/api/game-types', gameTypesRouter);
 app.use('/api/games', gamesRouter);
@@ -69,6 +78,7 @@ app.use('/api/admin', adminMonitoringRouter);
 app.use('/api/community', communityRouter);
 app.use('/api/profile', profileRouter);
 app.use('/api', wikiReferenceRouter);
+app.use('/api', gameCharactersRouter);
 app.use('/api', tabletopRouter);
 app.use('/api/protected', protectedRoutes);
 

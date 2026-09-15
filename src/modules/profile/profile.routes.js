@@ -1,6 +1,13 @@
 const express = require('express');
+const multer = require('multer');
 const profileController = require('./profile.controller');
 const { requireAuth } = require('../../middleware/auth.middleware');
+const { MAX_PORTRAIT_BYTES } = require('./portrait-storage');
+
+const portraitUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_PORTRAIT_BYTES }
+});
 
 const profileRouter = express.Router();
 
@@ -10,6 +17,14 @@ profileRouter.get('/activity', requireAuth, profileController.getGameActivity);
 profileRouter.get('/characters', requireAuth, profileController.listCharacters);
 profileRouter.post('/characters', requireAuth, profileController.createCharacter);
 profileRouter.patch('/characters/:id', requireAuth, profileController.updateCharacter);
+profileRouter.delete('/characters/:id', requireAuth, profileController.deleteCharacter);
+profileRouter.post(
+  '/characters/:id/portrait',
+  requireAuth,
+  portraitUpload.single('portrait'),
+  profileController.uploadCharacterPortrait
+);
+profileRouter.delete('/characters/:id/portrait', requireAuth, profileController.deleteCharacterPortrait);
 profileRouter.get('/rating', requireAuth, profileController.getRating);
 profileRouter.post('/rating', requireAuth, profileController.submitRating);
 

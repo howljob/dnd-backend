@@ -1,22 +1,8 @@
 const profileService = require('./profile.service');
 
 function handleError(res, error) {
-  if (error.statusCode === 400) {
-    return res.status(400).json({
-      ok: false,
-      message: error.message
-    });
-  }
-
-  if (error.statusCode === 401) {
-    return res.status(401).json({
-      ok: false,
-      message: error.message
-    });
-  }
-
-  if (error.statusCode === 404) {
-    return res.status(404).json({
+  if ([400, 401, 403, 404, 409].includes(error.statusCode)) {
+    return res.status(error.statusCode).json({
       ok: false,
       message: error.message
     });
@@ -93,6 +79,42 @@ async function createCharacter(req, res) {
 async function updateCharacter(req, res) {
   try {
     const character = await profileService.updateCharacter(req.auth, req.params.id, req.body);
+    return res.status(200).json({
+      ok: true,
+      character
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+async function deleteCharacter(req, res) {
+  try {
+    const result = await profileService.deleteCharacter(req.auth, req.params.id);
+    return res.status(200).json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+async function uploadCharacterPortrait(req, res) {
+  try {
+    const character = await profileService.uploadCharacterPortrait(req.auth, req.params.id, req.file);
+    return res.status(200).json({
+      ok: true,
+      character
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+async function deleteCharacterPortrait(req, res) {
+  try {
+    const character = await profileService.deleteCharacterPortrait(req.auth, req.params.id);
     return res.status(200).json({
       ok: true,
       character
@@ -193,6 +215,9 @@ module.exports = {
   listCharacters,
   createCharacter,
   updateCharacter,
+  deleteCharacter,
+  uploadCharacterPortrait,
+  deleteCharacterPortrait,
   getRating,
   listSecuritySessions,
   changePassword,

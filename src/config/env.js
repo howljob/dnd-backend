@@ -13,5 +13,7 @@ module.exports = {
   // Дополнительные origin для CORS через запятую (например, второй домен на проде)
   corsOrigins: (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
   jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
-  jwtAccessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '7d'
+  jwtAccessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '7d',
+  // Лимит файлового хранилища на пользователя, МБ (метрика storage_limit_approach, T5.7)
+  storageLimitMb: Number(process.env.STORAGE_LIMIT_MB) || 100
 };
