@@ -40,6 +40,11 @@ tabletopRouter.post(
   tabletopController.uploadMap
 );
 tabletopRouter.get(
+  '/tabletop/games/:gameId/events',
+  requireAuth,
+  tabletopController.listGameEvents
+);
+tabletopRouter.get(
   '/tabletop/games/:gameId/characters',
   requireAuth,
   tabletopController.listGameCharacters

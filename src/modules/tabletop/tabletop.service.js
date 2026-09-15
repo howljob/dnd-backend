@@ -2,6 +2,7 @@ const path = require('path');
 const fs = require('fs/promises');
 const crypto = require('crypto');
 const pool = require('../../db/pool');
+const dice = require('./dice');
 
 const UPLOADS_VTT_DIR = path.join(process.cwd(), 'uploads', 'vtt');
 const ALLOWED_IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
@@ -522,6 +523,231 @@ async function removeGameCharacter(auth, gameId, linkId) {
   return { ok: true };
 }
 
+/* --- T6.1: серверный лог событий стола (table_events) --- */
+
+const EVENT_TYPES = new Set(['roll', 'action', 'playerDisconnected', 'playerReconnected']);
+const ACTION_TYPES = new Set(['attack', 'spell', 'ability']);
+const ROLL_KINDS = new Set(['hit', 'damage', 'check']);
+const EVENTS_PAGE_LIMIT = 100;
+const EVENTS_MAX_LIMIT = 200;
+
+function mapEventRow(row) {
+  return {
+    id: Number(row.id),
+    gameId: row.game_id,
+    sessionId: row.session_id || null,
+    type: row.type,
+    actorUserId: row.actor_user_id || null,
+    actorName: row.actor_name || null,
+    payload: row.payload && typeof row.payload === 'object' ? row.payload : {},
+    isPrivate: Boolean(row.is_private),
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at
+  };
+}
+
+async function getLiveSessionId(gameId) {
+  const result = await pool.query(
+    `SELECT id FROM game_sessions
+     WHERE game_id = $1 AND status = 'live'
+     ORDER BY starts_at DESC
+     LIMIT 1`,
+    [gameId]
+  );
+  return result.rows[0]?.id || null;
+}
+
+async function getUserDisplayName(userId) {
+  if (!isUuid(userId)) return null;
+  const result = await pool.query(
+    'SELECT display_name FROM users WHERE id = $1 LIMIT 1',
+    [userId]
+  );
+  return result.rows[0]?.display_name || null;
+}
+
+async function insertTableEvent({ gameId, type, actorUserId, actorName, payload, isPrivate }) {
+  if (!EVENT_TYPES.has(type)) {
+    throw createHttpError(400, 'Unknown event type');
+  }
+  const sessionId = await getLiveSessionId(gameId);
+  const result = await pool.query(
+    `INSERT INTO table_events (game_id, session_id, type, actor_user_id, actor_name, payload, is_private)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+     RETURNING id, game_id, session_id, type, actor_user_id, actor_name, payload, is_private, created_at`,
+    [
+      gameId,
+      sessionId,
+      type,
+      actorUserId || null,
+      actorName || null,
+      JSON.stringify(payload && typeof payload === 'object' ? payload : {}),
+      Boolean(isPrivate)
+    ]
+  );
+  return mapEventRow(result.rows[0]);
+}
+
+function normalizeShortText(value, maxLength) {
+  if (typeof value !== 'string') return '';
+  return value.trim().slice(0, maxLength);
+}
+
+/**
+ * Бросок кубиков: формула пересчитывается сервером (dice.rollFormula),
+ * клиентский результат не принимается вовсе.
+ */
+async function createRollEvent(auth, gameId, data) {
+  const { isGm } = await getMyMembership(auth, gameId);
+  const payload = data && typeof data === 'object' ? data : {};
+  const roll = dice.rollFormula(payload.formula);
+  const label = normalizeShortText(payload.label, 120);
+  const isPrivate = Boolean(payload.private);
+  if (isPrivate && !isGm) {
+    throw createHttpError(403, 'Only GM can roll privately');
+  }
+
+  const actorName = await getUserDisplayName(auth.userId);
+  return insertTableEvent({
+    gameId,
+    type: 'roll',
+    actorUserId: auth.userId,
+    actorName,
+    payload: {
+      formula: roll.formula,
+      label: label || null,
+      total: roll.total,
+      detail: roll.detail
+    },
+    isPrivate
+  });
+}
+
+/**
+ * Структурированное действие (атака / заклинание / способность), PRD §5.4.6.
+ * Все броски внутри действия тоже считает сервер.
+ */
+async function createActionEvent(auth, gameId, data) {
+  await getMyMembership(auth, gameId);
+  const payload = data && typeof data === 'object' ? data : {};
+
+  const actionType = normalizeShortText(payload.actionType, 20);
+  if (!ACTION_TYPES.has(actionType)) {
+    throw createHttpError(400, 'Unknown action type');
+  }
+
+  const source = normalizeShortText(payload.source, 120);
+  if (!source) {
+    throw createHttpError(400, 'Action source is required');
+  }
+
+  const target = normalizeShortText(payload.target, 120);
+  const detail = normalizeShortText(payload.detail, 500);
+
+  let spellLevel = null;
+  if (payload.spellLevel !== undefined && payload.spellLevel !== null && payload.spellLevel !== '') {
+    const lvl = Number(payload.spellLevel);
+    if (!Number.isInteger(lvl) || lvl < 0 || lvl > 9) {
+      throw createHttpError(400, 'Invalid spell level');
+    }
+    spellLevel = lvl;
+  }
+
+  const rollsIn = Array.isArray(payload.rolls) ? payload.rolls.slice(0, 3) : [];
+  const rolls = [];
+  for (const item of rollsIn) {
+    if (!item || typeof item !== 'object') continue;
+    const kind = normalizeShortText(item.kind, 20);
+    if (!ROLL_KINDS.has(kind)) {
+      throw createHttpError(400, 'Unknown roll kind');
+    }
+    const result = dice.rollFormula(item.formula);
+    rolls.push({
+      kind,
+      formula: result.formula,
+      total: result.total,
+      detail: result.detail
+    });
+  }
+
+  const actorName = await getUserDisplayName(auth.userId);
+  return insertTableEvent({
+    gameId,
+    type: 'action',
+    actorUserId: auth.userId,
+    actorName,
+    payload: {
+      actionType,
+      source,
+      target: target || null,
+      detail: detail || null,
+      spellLevel,
+      rolls
+    },
+    isPrivate: false
+  });
+}
+
+/** Служебное событие (отключение/возврат игрока) — пишет сам сервер. */
+async function createPresenceEvent(gameId, type, userId) {
+  if (type !== 'playerDisconnected' && type !== 'playerReconnected') {
+    throw createHttpError(400, 'Unknown presence event type');
+  }
+  const actorName = await getUserDisplayName(userId);
+  return insertTableEvent({
+    gameId,
+    type,
+    actorUserId: userId,
+    actorName,
+    payload: {},
+    isPrivate: false
+  });
+}
+
+/**
+ * История событий. Игрок видит все публичные + свои приватные; мастер — всё.
+ * before/after — id события (пагинация назад / докачка после reconnect).
+ */
+async function listTableEvents(auth, gameId, query = {}) {
+  const { isGm } = await getMyMembership(auth, gameId);
+
+  const rawLimit = Number(query.limit);
+  const limit = Number.isInteger(rawLimit) && rawLimit > 0
+    ? Math.min(rawLimit, EVENTS_MAX_LIMIT)
+    : EVENTS_PAGE_LIMIT;
+
+  const conditions = ['game_id = $1'];
+  const values = [gameId];
+
+  if (!isGm) {
+    values.push(auth.userId);
+    conditions.push(`(is_private = false OR actor_user_id = $${values.length})`);
+  }
+
+  const before = Number(query.before);
+  if (Number.isFinite(before) && before > 0) {
+    values.push(Math.floor(before));
+    conditions.push(`id < $${values.length}`);
+  }
+
+  const after = Number(query.after);
+  if (Number.isFinite(after) && after >= 0) {
+    values.push(Math.floor(after));
+    conditions.push(`id > $${values.length}`);
+  }
+
+  const result = await pool.query(
+    `SELECT id, game_id, session_id, type, actor_user_id, actor_name, payload, is_private, created_at
+     FROM table_events
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY id DESC
+     LIMIT ${limit}`,
+    values
+  );
+
+  // Отдаём по возрастанию id — так проще рисовать ленту.
+  return result.rows.map(mapEventRow).reverse();
+}
+
 /* --- legacy tabletop_rooms (unchanged behaviour for old clients) --- */
 
 function normalizeRoomPayload(data) {
@@ -688,6 +914,10 @@ module.exports = {
   ensureDefaultScene,
   getMyMembership,
   mapSceneRow,
+  createRollEvent,
+  createActionEvent,
+  createPresenceEvent,
+  listTableEvents,
   createRoom,
   getRoom,
   patchRoomState

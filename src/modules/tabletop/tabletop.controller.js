@@ -153,6 +153,18 @@ async function uploadMap(req, res) {
   }
 }
 
+async function listGameEvents(req, res) {
+  try {
+    const items = await tabletopService.listTableEvents(req.auth, req.params.gameId, req.query);
+    return res.status(200).json({
+      ok: true,
+      items
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
 async function listGameCharacters(req, res) {
   try {
     const items = await tabletopService.listGameCharacters(req.auth, req.params.gameId);
@@ -203,6 +215,7 @@ module.exports = {
   publishScene,
   setActiveScene,
   uploadMap,
+  listGameEvents,
   listGameCharacters,
   addGameCharacter,
   removeGameCharacter

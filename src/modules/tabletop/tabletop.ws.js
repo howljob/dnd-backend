@@ -57,6 +57,20 @@ function attachTabletopWs(httpServer) {
     }
   }
 
+  /**
+   * T6.1: рассылка события ленты подписчикам игры.
+   * Приватное событие уходит только мастерам и автору.
+   */
+  function broadcastEvent(gameId, event) {
+    const set = subscribersByGame.get(gameId);
+    if (!set) return;
+    for (const client of set) {
+      if (client.ws.readyState !== WebSocket.OPEN) continue;
+      if (event.isPrivate && !client.isGm && client.userId !== event.actorUserId) continue;
+      client.ws.send(JSON.stringify({ type: 'event', item: event }));
+    }
+  }
+
   httpServer.on('upgrade', (request, socket, head) => {
     const host = request.headers.host || 'localhost';
     const pathname = new URL(request.url, `http://${host}`).pathname;
@@ -77,8 +91,8 @@ function attachTabletopWs(httpServer) {
     const payload = verifyWsToken(token);
     const userId = typeof payload?.sub === 'string' ? payload.sub : null;
 
-    /** @type {{ ws: import('ws'), userId: string, gameId: string | null }} */
-    const client = { ws, userId: userId || '', gameId: null };
+    /** @type {{ ws: import('ws'), userId: string, gameId: string | null, isGm: boolean }} */
+    const client = { ws, userId: userId || '', gameId: null, isGm: false };
 
     ws.on('message', async (raw) => {
       let msg;
@@ -89,12 +103,27 @@ function attachTabletopWs(httpServer) {
         return;
       }
 
-      if (!userId) {
-        ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized' }));
+      // T6.5 (переходный шаг): токен принимается первым кадром {type:'auth'},
+      // не в query-строке. Поддержка ?token= будет удалена в T6.5.
+      if (msg.type === 'auth') {
+        const framePayload = verifyWsToken(msg.token);
+        const frameUserId = typeof framePayload?.sub === 'string' ? framePayload.sub : null;
+        if (!frameUserId) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized', code: 401 }));
+          ws.close();
+          return;
+        }
+        client.userId = frameUserId;
+        ws.send(JSON.stringify({ type: 'authOk' }));
         return;
       }
 
-      const auth = { userId };
+      if (!client.userId) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized', code: 401 }));
+        return;
+      }
+
+      const auth = { userId: client.userId };
 
       try {
         if (msg.type === 'ping') {
@@ -106,11 +135,38 @@ function attachTabletopWs(httpServer) {
           if (client.gameId) {
             removeSubscriber(client.gameId, client);
           }
-          await tabletopService.getMyMembership(auth, msg.gameId);
+          const membership = await tabletopService.getMyMembership(auth, msg.gameId);
           client.gameId = msg.gameId;
+          client.isGm = Boolean(membership.isGm);
           addSubscriber(msg.gameId, client);
           const bundle = await tabletopService.getTabletopBundle(auth, msg.gameId);
           ws.send(JSON.stringify({ type: 'bundle', data: bundle }));
+          // История ленты: последние 100 событий (мастеру — включая приватные).
+          const events = await tabletopService.listTableEvents(auth, msg.gameId, { limit: 100 });
+          ws.send(JSON.stringify({ type: 'events', items: events }));
+          return;
+        }
+
+        if (msg.type === 'rollDice' && client.gameId) {
+          const event = await tabletopService.createRollEvent(auth, client.gameId, {
+            formula: msg.formula,
+            label: msg.label,
+            private: msg.private
+          });
+          broadcastEvent(client.gameId, event);
+          return;
+        }
+
+        if (msg.type === 'action' && client.gameId) {
+          const event = await tabletopService.createActionEvent(auth, client.gameId, {
+            actionType: msg.actionType,
+            source: msg.source,
+            target: msg.target,
+            detail: msg.detail,
+            spellLevel: msg.spellLevel,
+            rolls: msg.rolls
+          });
+          broadcastEvent(client.gameId, event);
           return;
         }
 
