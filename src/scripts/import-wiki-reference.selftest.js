@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const {
   sanitizeText,
+  sanitizeWikiMarkdown,
   trimMarkdownPreamble,
   parseMarkdownWikiEntry,
   normalizeTrimmedRow,
@@ -47,6 +48,15 @@ check('нет «Неограниченно∞»', !barbarian.content.includes('�
 check('шапка «Уровень» на месте', /\|\s*Уровень\s*\|/.test(barbarian.content));
 check('шапка «Урон ярости» на месте', /\|\s*Урон ярости\s*\|/.test(barbarian.content));
 check('fixGluedTableHeaders точечный', fixGluedTableHeaders('| Уровеньур | Яростькя |') === '| Уровень | Ярость |');
+
+// Мусорные хвосты-коды у заголовков статблоков и лесенка характеристик
+check('хвост HB HB:GH срезан', sanitizeWikiMarkdown('## Первобытный боец \\[Primal striker\\]HB HB:GH \nтекст')
+  === '## Первобытный боец \\[Primal striker\\]\nтекст');
+check('хвостов HB:GH нет в контенте варвара', !barbarian.content.includes('HB:GH'), '');
+const ladder = sanitizeWikiMarkdown('* Сил  \n15 (**+2**)  \nЛов  \n15 (**+2**)  \nИнт  \n4 (**\\-3**)');
+check('лесенка характеристик склеена в пары',
+  ladder === '**Сил** 15 (**+2**)\n**Лов** 15 (**+2**)\n**Инт** 4 (**\\-3**)', JSON.stringify(ladder));
+check('в контенте варвара лесенки нет', !/(^|\n)\*?[ \t]*(Сил|Лов|Тел|Инт|Мдр|Хар)[ \t]*\n/.test(barbarian.content), '');
 
 const structure = barbarian.payload.sections;
 check('payload.sections присутствует', Boolean(structure));
