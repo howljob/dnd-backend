@@ -151,6 +151,7 @@ function attachTabletopWs(httpServer) {
           const event = await tabletopService.createRollEvent(auth, client.gameId, {
             formula: msg.formula,
             label: msg.label,
+            mode: msg.mode,
             private: msg.private
           });
           broadcastEvent(client.gameId, event);

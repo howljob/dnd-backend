@@ -599,11 +599,43 @@ function normalizeShortText(value, maxLength) {
 async function createRollEvent(auth, gameId, data) {
   const { isGm } = await getMyMembership(auth, gameId);
   const payload = data && typeof data === 'object' ? data : {};
-  const roll = dice.rollFormula(payload.formula);
   const label = normalizeShortText(payload.label, 120);
   const isPrivate = Boolean(payload.private);
   if (isPrivate && !isGm) {
     throw createHttpError(403, 'Only GM can roll privately');
+  }
+
+  // Преимущество/помеха: формула бросается дважды, берётся лучший/худший итог.
+  const mode = payload.mode === 'advantage' || payload.mode === 'disadvantage'
+    ? payload.mode
+    : null;
+
+  let eventPayload;
+  if (mode) {
+    const first = dice.rollFormula(payload.formula);
+    const second = dice.rollFormula(payload.formula);
+    const chosen = mode === 'advantage'
+      ? (first.total >= second.total ? first : second)
+      : (first.total <= second.total ? first : second);
+    eventPayload = {
+      formula: chosen.formula,
+      label: label || null,
+      mode,
+      attempts: [
+        { total: first.total, detail: first.detail },
+        { total: second.total, detail: second.detail }
+      ],
+      total: chosen.total,
+      detail: chosen.detail
+    };
+  } else {
+    const roll = dice.rollFormula(payload.formula);
+    eventPayload = {
+      formula: roll.formula,
+      label: label || null,
+      total: roll.total,
+      detail: roll.detail
+    };
   }
 
   const actorName = await getUserDisplayName(auth.userId);
@@ -612,12 +644,7 @@ async function createRollEvent(auth, gameId, data) {
     type: 'roll',
     actorUserId: auth.userId,
     actorName,
-    payload: {
-      formula: roll.formula,
-      label: label || null,
-      total: roll.total,
-      detail: roll.detail
-    },
+    payload: eventPayload,
     isPrivate
   });
 }
