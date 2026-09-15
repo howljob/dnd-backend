@@ -35,6 +35,9 @@ check('нет секции Галерея', !/(^|\n)#{1,6}\s*Галерея/.tes
 check('контент заметно короче сырого файла', barbarian.content.length < barbarianMd.length * 0.5,
   `${barbarian.content.length} из ${barbarianMd.length}`);
 check('умения класса сохранились', barbarian.content.includes('### ЯРОСТЬ'));
+check('нет строк «Распечатать»', !/(^|\n)\s*\*?\s*Распечатать\s*(\n|$)/.test(barbarian.content));
+check('summary без символов разметки', !/[#>|*`]/.test(barbarian.summary), JSON.stringify(barbarian.summary));
+check('summary осмысленный', barbarian.summary.length > 20, JSON.stringify(barbarian.summary));
 
 const structure = barbarian.payload.sections;
 check('payload.sections присутствует', Boolean(structure));

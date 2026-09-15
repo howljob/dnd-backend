@@ -48,8 +48,34 @@ function sanitizeWikiMarkdown(value) {
     .replace(/window\.commentsAccess\s*=\s*\{[\s\S]*$/i, '')
     .replace(/(^|\n)[ \t]{0,3}#{0,6}[ \t]*Комментарии[ \t]*(?=\n|$)[\s\S]*$/, '$1')
     .replace(/(^|\n)[ \t]{0,3}#{1,6}[ \t]*Галерея[ \t]*(?=\n|$)[\s\S]*$/, '$1')
+    .replace(/(^|\n)[ \t]*\*?[ \t]*Распечатать[ \t]*(?=\n|$)/g, '$1')
     .replace(/[ \t]+\n/g, '\n')
     .trim();
+}
+
+/**
+ * Краткое описание из markdown: первый «обычный» абзац без заголовков,
+ * списков, цитат, таблиц и служебных строк dnd.su («Распечатать»,
+ * «Источник: …») — чтобы в карточку не попадали символы разметки.
+ */
+function extractPlainSummarySource(md) {
+  const lines = String(md || '').split(/\r?\n/);
+  const out = [];
+  for (const raw of lines) {
+    const t = raw.trim();
+    if (!t) {
+      if (out.length) break; // конец первого абзаца
+      continue;
+    }
+    if (/^#{1,6}\s/.test(t)) continue;
+    if (/^[>*|+-]/.test(t)) continue;
+    if (/^\d+[.)]\s/.test(t)) continue;
+    if (/^Распечатать$/i.test(t)) continue;
+    if (/^\*{0,2}Источник/i.test(t)) continue;
+    out.push(t);
+    if (out.join(' ').length > 500) break;
+  }
+  return sanitizeText(out.join(' ').replace(/\*\*|`|\\([[\]])/g, '$1'));
 }
 
 function parseJsonFile(filePath) {
@@ -339,7 +365,7 @@ function parseMarkdownWikiEntry(section, slug, rawMd) {
   const source = parseSourceFromMarkdown(rawMd);
   const content = sanitizeWikiMarkdown(trimmed);
   const baseName = name || nameEn || slug;
-  const summary = firstSentence(sanitizeText(trimmed.slice(0, 4000)));
+  const summary = firstSentence(extractPlainSummarySource(trimmed.slice(0, 8000)));
   const filters = buildFilters(section, {
     article_text: trimmed.slice(0, 120000),
     params_json: [],
