@@ -22,10 +22,6 @@ const adminContentRouter = require('./modules/admin-content/admin-content.routes
 const adminMonitoringRouter = require('./modules/admin-monitoring/admin-monitoring.routes');
 const communityRouter = require('./modules/community/community.routes');
 const profileRouter = require('./modules/profile/profile.routes');
-const {
-  wikiRouter,
-  wikiAdminRouter
-} = require('./modules/wiki/wiki.routes');
 const wikiReferenceRouter = require('./modules/wiki-reference/wiki-reference.routes');
 const tabletopRouter = require('./modules/tabletop/tabletop.routes');
 const protectedRoutes = require('./routes/protected.routes');
@@ -72,8 +68,6 @@ app.use('/api/admin', adminContentRouter);
 app.use('/api/admin', adminMonitoringRouter);
 app.use('/api/community', communityRouter);
 app.use('/api/profile', profileRouter);
-app.use('/api/wiki', wikiRouter);
-app.use('/api/admin', wikiAdminRouter);
 app.use('/api', wikiReferenceRouter);
 app.use('/api', tabletopRouter);
 app.use('/api/protected', protectedRoutes);
