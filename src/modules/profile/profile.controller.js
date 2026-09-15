@@ -1,22 +1,9 @@
 const profileService = require('./profile.service');
 
 function handleError(res, error) {
-  if (error.statusCode === 400) {
-    return res.status(400).json({
-      ok: false,
-      message: error.message
-    });
-  }
-
-  if (error.statusCode === 401) {
-    return res.status(401).json({
-      ok: false,
-      message: error.message
-    });
-  }
-
-  if (error.statusCode === 404) {
-    return res.status(404).json({
+  // 403/409 добавлены в T8.1: запрет оценки вне сессии и повторной оценки.
+  if ([400, 401, 403, 404, 409].includes(error.statusCode)) {
+    return res.status(error.statusCode).json({
       ok: false,
       message: error.message
     });
@@ -162,6 +149,18 @@ async function revokeSingleSession(req, res) {
   }
 }
 
+async function getRatingSessionContext(req, res) {
+  try {
+    const context = await profileService.getRatingSessionContext(req.auth, req.params.sessionId);
+    return res.status(200).json({
+      ok: true,
+      ...context
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
 async function submitRating(req, res) {
   try {
     const result = await profileService.submitRating(req.auth, req.body);
@@ -194,6 +193,7 @@ module.exports = {
   createCharacter,
   updateCharacter,
   getRating,
+  getRatingSessionContext,
   listSecuritySessions,
   changePassword,
   signOutAllSessions,

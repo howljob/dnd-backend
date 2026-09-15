@@ -11,6 +11,8 @@ profileRouter.get('/characters', requireAuth, profileController.listCharacters);
 profileRouter.post('/characters', requireAuth, profileController.createCharacter);
 profileRouter.patch('/characters/:id', requireAuth, profileController.updateCharacter);
 profileRouter.get('/rating', requireAuth, profileController.getRating);
+// T8.1: контекст оценки сессии — участники завершённой сессии и кого уже оценил.
+profileRouter.get('/rating/session/:sessionId', requireAuth, profileController.getRatingSessionContext);
 profileRouter.post('/rating', requireAuth, profileController.submitRating);
 
 profileRouter.get('/security/sessions', requireAuth, profileController.listSecuritySessions);
