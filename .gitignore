@@ -7,6 +7,10 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 coverage/
+# dev-режим почты: письма-файлы (T3.1)
+var/
+# загруженные пользователями файлы (аватары, карты)
+uploads/
 dist/
 build/
 .DS_Store
