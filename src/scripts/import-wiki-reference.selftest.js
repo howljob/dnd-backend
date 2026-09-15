@@ -9,7 +9,8 @@ const {
   sanitizeText,
   trimMarkdownPreamble,
   parseMarkdownWikiEntry,
-  normalizeTrimmedRow
+  normalizeTrimmedRow,
+  fixGluedTableHeaders
 } = require('./import-wiki-reference');
 
 const ASSETS_WIKI_DIR = process.env.WIKI_ASSETS_DIR || 'C:/projects/dnd/assets/wiki';
@@ -38,6 +39,14 @@ check('умения класса сохранились', barbarian.content.incl
 check('нет строк «Распечатать»', !/(^|\n)\s*\*?\s*Распечатать\s*(\n|$)/.test(barbarian.content));
 check('summary без символов разметки', !/[#>|*`]/.test(barbarian.summary), JSON.stringify(barbarian.summary));
 check('summary осмысленный', barbarian.summary.length > 20, JSON.stringify(barbarian.summary));
+
+// Склеенные шапки таблиц dnd.su расклеены (координатор, пункт 1)
+check('нет «Уровеньур» в контенте', !barbarian.content.includes('Уровеньур'));
+check('нет «Яростькя» в контенте', !barbarian.content.includes('Яростькя'));
+check('нет «Неограниченно∞»', !barbarian.content.includes('Неограниченно∞'));
+check('шапка «Уровень» на месте', /\|\s*Уровень\s*\|/.test(barbarian.content));
+check('шапка «Урон ярости» на месте', /\|\s*Урон ярости\s*\|/.test(barbarian.content));
+check('fixGluedTableHeaders точечный', fixGluedTableHeaders('| Уровеньур | Яростькя |') === '| Уровень | Ярость |');
 
 const structure = barbarian.payload.sections;
 check('payload.sections присутствует', Boolean(structure));
