@@ -1,7 +1,11 @@
+const fs = require('fs');
+const path = require('path');
 const bcrypt = require('bcrypt');
 const pool = require('../../db/pool');
 
 const SALT_ROUNDS = 10;
+// T3.5: файловые аватары
+const AVATARS_DIR = path.join(__dirname, '..', '..', '..', 'uploads', 'avatars');
 const GAME_ACTIVITY_EVENTS = [
   'game.created',
   'game.join_requested',
@@ -44,6 +48,8 @@ function normalizeProfilePayload(data) {
   const payload = data && typeof data === 'object' ? data : {};
   const displayName = typeof payload.displayName === 'string' ? payload.displayName.trim() : '';
   const bio = typeof payload.bio === 'string' ? payload.bio.trim() : '';
+  // T3.5: поле avatar не прислали вовсе → аватар не трогаем (файл загружается отдельным эндпоинтом)
+  const avatarProvided = Object.prototype.hasOwnProperty.call(payload, 'avatar');
   const avatarRaw = payload.avatar;
   const avatar = typeof avatarRaw === 'string' ? avatarRaw.trim() : (avatarRaw === null ? null : '');
 
@@ -56,13 +62,14 @@ function normalizeProfilePayload(data) {
   if (bio.length > 4000) {
     throw createHttpError(400, 'Bio is too long');
   }
-  if (avatar !== null && avatar && avatar.length > 3 * 1024 * 1024) {
+  if (avatarProvided && avatar !== null && avatar && avatar.length > 3 * 1024 * 1024) {
     throw createHttpError(400, 'Avatar payload is too large');
   }
-  if (avatar !== null && avatar) {
+  if (avatarProvided && avatar !== null && avatar) {
     const isDataImage = /^data:image\/[a-z0-9.+-]+;base64,/i.test(avatar);
     const isHttpUrl = /^https?:\/\/.+/i.test(avatar);
-    if (!isDataImage && !isHttpUrl) {
+    const isLocalUpload = /^\/uploads\/avatars\/[A-Za-z0-9._-]+$/.test(avatar);
+    if (!isDataImage && !isHttpUrl && !isLocalUpload) {
       throw createHttpError(400, 'Avatar format is not supported');
     }
   }
@@ -70,6 +77,7 @@ function normalizeProfilePayload(data) {
   return {
     displayName,
     bio,
+    avatarProvided,
     avatar: avatar === '' ? null : avatar
   };
 }
@@ -185,40 +193,63 @@ function mapCharacterRow(row) {
   };
 }
 
+/**
+ * T3.5: удалить старый файловый аватар с диска (best effort).
+ */
+function deleteLocalAvatarFile(avatarUrl) {
+  if (typeof avatarUrl !== 'string' || !avatarUrl.startsWith('/uploads/avatars/')) {
+    return;
+  }
+
+  const fileName = path.basename(avatarUrl);
+  const filePath = path.join(AVATARS_DIR, fileName);
+
+  fs.promises.unlink(filePath).catch(() => { /* файла уже нет — не страшно */ });
+}
+
 async function updateMyProfile(auth, data) {
   requireAuthUser(auth);
   const payload = normalizeProfilePayload(data);
 
-  const result = await pool.query(
-    `UPDATE users
-     SET
-       display_name = $2,
-       bio = $3,
-       avatar_url = $4,
-       updated_at = now()
-     WHERE id = $1
-     RETURNING
-       id,
-       email,
-       display_name,
-       role,
-       language,
-       account_status,
-       bio,
-       avatar_url,
-       created_at,
-       updated_at`,
-    [
-      auth.userId,
-      payload.displayName,
-      payload.bio,
-      payload.avatar
-    ]
-  );
+  let previousAvatarUrl = null;
+  if (payload.avatarProvided) {
+    const prev = await pool.query('SELECT avatar_url FROM users WHERE id = $1 LIMIT 1', [auth.userId]);
+    previousAvatarUrl = prev.rows[0]?.avatar_url || null;
+  }
+
+  const result = payload.avatarProvided
+    ? await pool.query(
+      `UPDATE users
+       SET
+         display_name = $2,
+         bio = $3,
+         avatar_url = $4,
+         updated_at = now()
+       WHERE id = $1
+       RETURNING
+         id, email, display_name, role, language, account_status, bio, avatar_url, created_at, updated_at`,
+      [auth.userId, payload.displayName, payload.bio, payload.avatar]
+    )
+    : await pool.query(
+      `UPDATE users
+       SET
+         display_name = $2,
+         bio = $3,
+         updated_at = now()
+       WHERE id = $1
+       RETURNING
+         id, email, display_name, role, language, account_status, bio, avatar_url, created_at, updated_at`,
+      [auth.userId, payload.displayName, payload.bio]
+    );
 
   const user = result.rows[0];
   if (!user) {
     throw createHttpError(404, 'User not found');
+  }
+
+  // Старый файловый аватар больше не используется — подчищаем.
+  if (payload.avatarProvided && previousAvatarUrl && previousAvatarUrl !== payload.avatar) {
+    deleteLocalAvatarFile(previousAvatarUrl);
   }
 
   return {
@@ -232,6 +263,52 @@ async function updateMyProfile(auth, data) {
     avatar: user.avatar_url || null,
     createdAt: user.created_at instanceof Date ? user.created_at.toISOString() : user.created_at,
     updatedAt: user.updated_at instanceof Date ? user.updated_at.toISOString() : user.updated_at
+  };
+}
+
+/**
+ * T3.5: аватар-файл уже сохранён multer'ом в uploads/avatars —
+ * записываем ссылку в профиль и удаляем предыдущий файл.
+ */
+async function updateMyAvatarFile(auth, file) {
+  requireAuthUser(auth);
+
+  if (!file || !file.filename) {
+    throw createHttpError(400, 'Avatar file is required');
+  }
+
+  const avatarUrl = `/uploads/avatars/${file.filename}`;
+
+  const prev = await pool.query('SELECT avatar_url FROM users WHERE id = $1 LIMIT 1', [auth.userId]);
+  if (prev.rows.length === 0) {
+    deleteLocalAvatarFile(avatarUrl);
+    throw createHttpError(404, 'User not found');
+  }
+  const previousAvatarUrl = prev.rows[0].avatar_url || null;
+
+  const result = await pool.query(
+    `UPDATE users
+     SET avatar_url = $2, updated_at = now()
+     WHERE id = $1
+     RETURNING id, email, display_name, role, language, account_status, bio, avatar_url`,
+    [auth.userId, avatarUrl]
+  );
+
+  const user = result.rows[0];
+
+  if (previousAvatarUrl && previousAvatarUrl !== avatarUrl) {
+    deleteLocalAvatarFile(previousAvatarUrl);
+  }
+
+  return {
+    id: user.id,
+    email: user.email,
+    displayName: user.display_name,
+    role: user.role,
+    language: user.language,
+    accountStatus: user.account_status,
+    bio: user.bio || '',
+    avatar: user.avatar_url || null
   };
 }
 
@@ -994,6 +1071,7 @@ async function syncAchievementProgress(auth, payload) {
 
 module.exports = {
   updateMyProfile,
+  updateMyAvatarFile,
   getPersonalGames,
   getGameActivity,
   listCharacters,

@@ -54,6 +54,21 @@ async function updateMyProfile(req, res) {
   }
 }
 
+/**
+ * T3.5: загрузка аватара файлом (multer уже положил файл в uploads/avatars).
+ */
+async function uploadMyAvatar(req, res) {
+  try {
+    const user = await profileService.updateMyAvatarFile(req.auth, req.file);
+    return res.status(200).json({
+      ok: true,
+      user
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
 async function getGameActivity(req, res) {
   try {
     const items = await profileService.getGameActivity(req.auth, req.query);
@@ -188,6 +203,7 @@ async function syncAchievementProgress(req, res) {
 
 module.exports = {
   updateMyProfile,
+  uploadMyAvatar,
   getPersonalGames,
   getGameActivity,
   listCharacters,

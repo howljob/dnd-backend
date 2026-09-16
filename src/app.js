@@ -54,6 +54,8 @@ app.use(cors({
 
 app.use(express.json({ limit: '12mb' }));
 app.use('/uploads/vtt', express.static(path.join(__dirname, '..', 'uploads', 'vtt')));
+// T3.5: файловые аватары пользователей
+app.use('/uploads/avatars', express.static(path.join(__dirname, '..', 'uploads', 'avatars')));
 app.use('/api/auth', authRoutes);
 app.use('/api/game-types', gameTypesRouter);
 app.use('/api/games', gamesRouter);
