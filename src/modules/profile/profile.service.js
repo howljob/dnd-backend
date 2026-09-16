@@ -2,6 +2,9 @@ const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcrypt');
 const pool = require('../../db/pool');
+const characterSheet = require('./character-sheet');
+const portraitStorage = require('./portrait-storage');
+const metricsService = require('../metrics/metrics.service');
 
 const SALT_ROUNDS = 10;
 // T3.5: файловые аватары
@@ -94,39 +97,12 @@ function normalizeOptionalText(value, maxLength = 300) {
   return text;
 }
 
-function estimateDataUrlBytes(dataUrl) {
-  if (typeof dataUrl !== 'string') return 0;
-  const trimmed = dataUrl.trim();
-  const match = /^data:([^;]+);base64,(.*)$/i.exec(trimmed);
-  if (!match) return 0;
-  const base64 = match[2] || '';
-  const normalizedLen = base64.replace(/\s+/g, '').length;
-  if (!normalizedLen) return 0;
-  const padding = base64.endsWith('==') ? 2 : (base64.endsWith('=') ? 1 : 0);
-  return Math.max(0, Math.floor((normalizedLen * 3) / 4) - padding);
-}
-
-function validateCharacterNotesSoftLimits(notes) {
-  if (typeof notes !== 'string') return;
-  const trimmed = notes.trim();
-  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return;
-
-  try {
-    const parsed = JSON.parse(trimmed);
-    const portrait = parsed?.sheet?.portrait;
-    if (typeof portrait === 'string' && /^data:image\/[a-z0-9.+-]+;base64,/i.test(portrait)) {
-      const bytes = estimateDataUrlBytes(portrait);
-      if (bytes > 2 * 1024 * 1024) {
-        throw createHttpError(400, 'Portrait payload is too large');
-      }
-    }
-  } catch (error) {
-    if (error?.statusCode) throw error;
-    // If notes is not valid JSON, treat it as plain text (backward compatible).
-  }
-}
-
-function normalizeCharacterPayload(data) {
+/**
+ * T5.1: лист персонажа — jsonb-колонка sheet, notes — обычные заметки.
+ * Легаси-клиенты, шлющие sheetVersion:1 JSON в notes, конвертируются на лету;
+ * preservedLegacyPortrait — data-URL портрета из существующей строки БД.
+ */
+function normalizeCharacterPayload(data, options = {}) {
   const payload = data && typeof data === 'object' ? data : {};
   const name = String(payload.name || '').trim();
   const gameSystem = String(payload.gameSystem || '').trim();
@@ -135,7 +111,6 @@ function normalizeCharacterPayload(data) {
   const level = Number(payload.level);
   const campaignName = normalizeOptionalText(payload.campaignName, 180);
   const background = normalizeOptionalText(payload.background, 300);
-  const notes = normalizeOptionalText(payload.notes, 10 * 1024 * 1024);
   const statusRaw = String(payload.status || 'active').trim().toLowerCase();
   const status = statusRaw === 'archived' ? 'archived' : 'active';
 
@@ -161,7 +136,21 @@ function normalizeCharacterPayload(data) {
     throw createHttpError(400, 'Level must be an integer between 1 and 20');
   }
 
-  validateCharacterNotesSoftLimits(notes);
+  let notes = normalizeOptionalText(payload.notes, 8000);
+  let sheetSource = payload.sheet;
+
+  // Обратная совместимость записи: старый клиент кладёт JSON-лист в notes.
+  if (!sheetSource && notes) {
+    const legacy = characterSheet.sheetFromLegacyNotes(notes, level);
+    if (legacy) {
+      sheetSource = legacy.sheet;
+      notes = legacy.notes || null;
+    }
+  }
+
+  const sheet = characterSheet.normalizeSheet(sheetSource, level, {
+    preservedLegacyPortrait: options.preservedLegacyPortrait || null
+  });
 
   return {
     name,
@@ -172,11 +161,30 @@ function normalizeCharacterPayload(data) {
     campaignName,
     background,
     notes,
+    sheet,
     status
   };
 }
 
+function parseSheetColumn(row) {
+  let sheet = row.sheet && typeof row.sheet === 'object' ? row.sheet : {};
+  let notes = row.notes || '';
+
+  // Чтение старого формата: строка вставлена напрямую со sheetVersion:1 в notes
+  // (миграция её не видела) — раскладываем на лету, без потерь.
+  if ((!sheet || Object.keys(sheet).length === 0) && notes) {
+    const legacy = characterSheet.sheetFromLegacyNotes(notes, Number(row.level || 1));
+    if (legacy) {
+      sheet = legacy.sheet;
+      notes = legacy.notes || '';
+    }
+  }
+
+  return { sheet, notes };
+}
+
 function mapCharacterRow(row) {
+  const { sheet, notes } = parseSheetColumn(row);
   return {
     id: row.id,
     name: row.name,
@@ -186,7 +194,9 @@ function mapCharacterRow(row) {
     level: Number(row.level || 1),
     campaignName: row.campaign_name || '',
     background: row.background || '',
-    notes: row.notes || '',
+    notes,
+    sheet,
+    portraitUrl: row.portrait_path ? portraitStorage.portraitUrl(row.portrait_path) : null,
     status: row.status || 'active',
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at)
@@ -392,12 +402,9 @@ async function getGameActivity(auth, query = {}) {
   }));
 }
 
-async function listCharacters(auth) {
-  requireAuthUser(auth);
-
-  const result = await pool.query(
-    `SELECT
+const CHARACTER_COLUMNS = `
       id,
+      user_id,
       name,
       game_system,
       class_name,
@@ -406,9 +413,17 @@ async function listCharacters(auth) {
       campaign_name,
       background,
       notes,
+      sheet,
+      portrait_path,
       status,
       created_at,
-      updated_at
+      updated_at`;
+
+async function listCharacters(auth) {
+  requireAuthUser(auth);
+
+  const result = await pool.query(
+    `SELECT ${CHARACTER_COLUMNS}
     FROM user_characters
     WHERE user_id = $1
     ORDER BY updated_at DESC, created_at DESC`,
@@ -416,6 +431,30 @@ async function listCharacters(auth) {
   );
 
   return result.rows.map((row) => mapCharacterRow(row));
+}
+
+/** Строка персонажа с проверкой владения: чужой id — 403, нет — 404. */
+async function getOwnedCharacterRow(auth, characterId) {
+  requireAuthUser(auth);
+  if (!isUuid(characterId)) {
+    throw createHttpError(400, 'Invalid character id');
+  }
+
+  const result = await pool.query(
+    `SELECT ${CHARACTER_COLUMNS}
+     FROM user_characters
+     WHERE id = $1
+     LIMIT 1`,
+    [characterId]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw createHttpError(404, 'Character not found');
+  }
+  if (row.user_id !== auth.userId) {
+    throw createHttpError(403, 'Forbidden');
+  }
+  return row;
 }
 
 async function createCharacter(auth, data) {
@@ -433,24 +472,13 @@ async function createCharacter(auth, data) {
       campaign_name,
       background,
       notes,
+      sheet,
       status,
       created_at,
       updated_at
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), now())
-    RETURNING
-      id,
-      name,
-      game_system,
-      class_name,
-      race,
-      level,
-      campaign_name,
-      background,
-      notes,
-      status,
-      created_at,
-      updated_at`,
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), now())
+    RETURNING ${CHARACTER_COLUMNS}`,
     [
       auth.userId,
       payload.name,
@@ -461,6 +489,7 @@ async function createCharacter(auth, data) {
       payload.campaignName,
       payload.background,
       payload.notes,
+      payload.sheet,
       payload.status
     ]
   );
@@ -469,12 +498,30 @@ async function createCharacter(auth, data) {
 }
 
 async function updateCharacter(auth, characterId, data) {
-  requireAuthUser(auth);
-  if (!isUuid(characterId)) {
-    throw createHttpError(400, 'Invalid character id');
+  const existing = await getOwnedCharacterRow(auth, characterId);
+  const { sheet: existingSheet } = parseSheetColumn(existing);
+
+  const payload = normalizeCharacterPayload(data, {
+    preservedLegacyPortrait: existingSheet?.legacyPortrait || null
+  });
+
+  // T5.2: легаси-портрет (data-URL из старого формата) при сохранении
+  // конвертируется в файл, если файла ещё нет.
+  let portraitPath = existing.portrait_path || null;
+  if (!portraitPath && payload.sheet.legacyPortrait) {
+    try {
+      portraitPath = await portraitStorage.saveDataUrlPortrait(payload.sheet.legacyPortrait);
+      delete payload.sheet.legacyPortrait;
+    } catch (error) {
+      // Битый легаси data-URL не должен блокировать сохранение листа.
+      console.error('legacy portrait conversion failed', error);
+    }
+  }
+  if (portraitPath && payload.sheet.legacyPortrait) {
+    // Файл уже есть — легаси-копия в JSON больше не нужна.
+    delete payload.sheet.legacyPortrait;
   }
 
-  const payload = normalizeCharacterPayload(data);
   const result = await pool.query(
     `UPDATE user_characters
      SET
@@ -486,23 +533,13 @@ async function updateCharacter(auth, characterId, data) {
        campaign_name = $8,
        background = $9,
        notes = $10,
-       status = $11,
+       sheet = $11,
+       portrait_path = $12,
+       status = $13,
        updated_at = now()
      WHERE id = $1
        AND user_id = $2
-     RETURNING
-       id,
-       name,
-       game_system,
-       class_name,
-       race,
-       level,
-       campaign_name,
-       background,
-       notes,
-       status,
-       created_at,
-       updated_at`,
+     RETURNING ${CHARACTER_COLUMNS}`,
     [
       characterId,
       auth.userId,
@@ -514,6 +551,8 @@ async function updateCharacter(auth, characterId, data) {
       payload.campaignName,
       payload.background,
       payload.notes,
+      payload.sheet,
+      portraitPath,
       payload.status
     ]
   );
@@ -524,6 +563,79 @@ async function updateCharacter(auth, characterId, data) {
   }
 
   return mapCharacterRow(character);
+}
+
+/** T5.3: удаление персонажа. Каскад чистит привязки game_characters. */
+async function deleteCharacter(auth, characterId) {
+  const existing = await getOwnedCharacterRow(auth, characterId);
+
+  await pool.query(
+    'DELETE FROM user_characters WHERE id = $1 AND user_id = $2',
+    [characterId, auth.userId]
+  );
+
+  if (existing.portrait_path) {
+    await portraitStorage.deletePortraitFile(existing.portrait_path);
+  }
+
+  return { ok: true };
+}
+
+/** T5.2: загрузка портрета файлом (multer, uploads/portraits). */
+async function uploadCharacterPortrait(auth, characterId, file) {
+  const existing = await getOwnedCharacterRow(auth, characterId);
+
+  if (!file || !file.buffer) {
+    throw createHttpError(400, 'Portrait file is required');
+  }
+
+  const name = await portraitStorage.savePortraitBuffer(file.buffer, file.mimetype);
+
+  const { sheet, notes } = parseSheetColumn(existing);
+  if (sheet && sheet.legacyPortrait) {
+    delete sheet.legacyPortrait;
+  }
+
+  const result = await pool.query(
+    `UPDATE user_characters
+     SET portrait_path = $3, sheet = $4, notes = $5, updated_at = now()
+     WHERE id = $1 AND user_id = $2
+     RETURNING ${CHARACTER_COLUMNS}`,
+    [characterId, auth.userId, name, sheet || {}, notes || null]
+  );
+
+  if (existing.portrait_path) {
+    await portraitStorage.deletePortraitFile(existing.portrait_path);
+  }
+
+  // T5.7: после загрузки файла проверяем приближение к лимиту хранилища.
+  await metricsService.maybeRecordStorageLimitApproach(auth.userId);
+
+  return mapCharacterRow(result.rows[0]);
+}
+
+/** T5.2: удаление портрета (и легаси data-URL, если остался). */
+async function deleteCharacterPortrait(auth, characterId) {
+  const existing = await getOwnedCharacterRow(auth, characterId);
+
+  const { sheet, notes } = parseSheetColumn(existing);
+  if (sheet && sheet.legacyPortrait) {
+    delete sheet.legacyPortrait;
+  }
+
+  const result = await pool.query(
+    `UPDATE user_characters
+     SET portrait_path = NULL, sheet = $3, notes = $4, updated_at = now()
+     WHERE id = $1 AND user_id = $2
+     RETURNING ${CHARACTER_COLUMNS}`,
+    [characterId, auth.userId, sheet || {}, notes || null]
+  );
+
+  if (existing.portrait_path) {
+    await portraitStorage.deletePortraitFile(existing.portrait_path);
+  }
+
+  return mapCharacterRow(result.rows[0]);
 }
 
 async function getRating(auth) {
@@ -1077,6 +1189,12 @@ module.exports = {
   listCharacters,
   createCharacter,
   updateCharacter,
+  deleteCharacter,
+  uploadCharacterPortrait,
+  deleteCharacterPortrait,
+  getOwnedCharacterRow,
+  parseSheetColumn,
+  mapCharacterRow,
   getRating,
   listSecuritySessions,
   changePassword,

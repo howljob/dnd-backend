@@ -287,6 +287,7 @@ If continuing in a new session, use something like:
 
 > Read `HANDOFF.md` in `c:\projects\dnd-backend` and continue from the current backend state. The backend already has register/login, Docker Postgres on port 55432, migrations working, and no git repo is initialized in this folder.
 
+
 ## 2026-09-16 — Track T3 «Аккаунт» (ветка track/t3)
 
 - **Почта (T3.1):** `src/mail/mailer.js` (nodemailer) + `src/mail/templates.js` (русские шаблоны: подтверждение почты, сброс пароля). Без SMTP-переменных в `.env` — dev-режим: письмо пишется файлом в `var/outbox/<timestamp>-<тип>.html` (в `.gitignore`) + строка `[mail]` в лог. Значения-заглушки из `.env.example` считаются «не настроено». Инструкция для пользователя: `docs/email-setup.md`.
@@ -296,3 +297,31 @@ If continuing in a new session, use something like:
 - **Сессии и аватары (T3.5):** `POST /api/auth/logout` отзывает текущую сессию. `POST /api/profile/me/avatar` (multer, `uploads/avatars`, 2 МБ, только изображения; старый файл удаляется), статика `/uploads/avatars`, в базе относительный путь. `PATCH /api/profile/me` без поля `avatar` аватар не трогает; `avatar: null` удаляет (и файл тоже).
 - ⚠️ Для прода: nginx должен раздавать/проксировать `/uploads` на бэкенд, иначе файловые аватары не видны.
 - Тесты: `npm test` 3/3; e2e фронта `account-smoke.spec.js` покрывает весь цикл (читает письма из `var/outbox`).
+
+---
+
+## 2026-09-16 — Track T5 «Персонажи» (ветка track/t5, волна 2)
+
+- `user_characters`: лист персонажа теперь в `sheet` jsonb (+`portrait_path`),
+  `notes` — обычные заметки; миграция `1789515327878` переносит старый JSON
+  из notes (портрет-dataURL → `sheet.legacyPortrait`); чтение старого формата
+  v1 из notes поддерживается на лету (`src/modules/profile/character-sheet.js`).
+- Портреты — файлы в `uploads/portraits` (`POST/DELETE /api/profile/characters/:id/portrait`,
+  multer 2МБ, статика `/uploads/portraits`); легаси data-URL конвертируется в
+  файл при сохранении листа. `DELETE /api/profile/characters/:id` — удаление
+  с каскадом привязок.
+- `express.json` глобально 1mb; локальные исключения 12mb (`/api/community`,
+  вложения-dataURL — убрать в T8) и 4mb (`/api/profile/me`, аватар — убрать в T3.5).
+- Модуль `game-characters` (T5.4): `game_characters.state` jsonb (hp, hpMax,
+  tempHp, level, inventory, notes) + `created_from_sheet` — независимая копия
+  на стол; `POST /api/games/:gameId/characters/:characterId/link`,
+  `GET|PATCH /api/games/:gameId/my-character`, `POST .../sync-to-template`.
+  Ручки `/api/tabletop/games/:id/characters` не тронуты; их привязки без
+  state дополняются лениво.
+- Импортёр вики: `payload.meta` у классов (кость хитов, формулы хитов,
+  владения, спасброски, навыки, стартовое снаряжение) — источник данных для
+  листа и мастера создания на фронте. `payload.sections` не менялся.
+- Метрики (T5.7): таблица `metrics_events`, событие `storage_limit_approach`
+  при >80% лимита `STORAGE_LIMIT_MB` (.env, дефолт 100 МБ) — считает аватар +
+  портреты + карты сцен мастера; дедуп 24 часа.
+

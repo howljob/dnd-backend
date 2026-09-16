@@ -15,6 +15,9 @@ module.exports = {
   jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
   jwtAccessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '7d',
 
+  // Лимит файлового хранилища на пользователя, МБ (метрика storage_limit_approach, T5.7)
+  storageLimitMb: Number(process.env.STORAGE_LIMIT_MB) || 100,
+
   // Почта (T3.1). Если SMTP_* не заданы — dev-режим: письма пишутся в var/outbox/.
   smtpHost: process.env.SMTP_HOST || '',
   smtpPort: Number(process.env.SMTP_PORT) || 587,
