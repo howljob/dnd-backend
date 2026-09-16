@@ -88,11 +88,37 @@ async function listUpcomingSessions(req, res) {
   }
 }
 
+async function getSessionAttendance(req, res) {
+  try {
+    const attendance = await sessionsService.getSessionAttendance(req.auth, req.params.id);
+    return res.status(200).json({
+      ok: true,
+      ...attendance
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+async function setSessionAttendance(req, res) {
+  try {
+    const attendance = await sessionsService.setSessionAttendance(req.auth, req.params.id, req.body);
+    return res.status(200).json({
+      ok: true,
+      ...attendance
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
 module.exports = {
   createSession,
   updateSession,
   startSession,
   finishSession,
   listGameSessions,
-  listUpcomingSessions
+  listUpcomingSessions,
+  getSessionAttendance,
+  setSessionAttendance
 };

@@ -15,6 +15,10 @@ module.exports = {
   jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
   jwtAccessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '7d',
 
+  // T8.4: сколько дней ждём ответа мастера на запрос передачи игры.
+  // Допущение (подтвердить у пользователя): 7 дней по умолчанию.
+  transferTimeoutDays: Number(process.env.TRANSFER_TIMEOUT_DAYS) || 7,
+
   // Лимит файлового хранилища на пользователя, МБ (метрика storage_limit_approach, T5.7)
   storageLimitMb: Number(process.env.STORAGE_LIMIT_MB) || 100,
 

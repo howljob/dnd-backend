@@ -11,6 +11,8 @@ gameMembershipsRouter.post('/:id/join', requireAuth, membershipsController.joinG
 membershipActionsRouter.patch('/:id/approve', requireAuth, membershipsController.approveMembership);
 membershipActionsRouter.patch('/:id/reject', requireAuth, membershipsController.rejectMembership);
 membershipActionsRouter.patch('/:id/cancel', requireAuth, membershipsController.cancelMembership);
+// T8.3: мастер исключает участника из игры.
+membershipActionsRouter.patch('/:id/kick', requireAuth, membershipsController.kickMembership);
 
 module.exports = {
   gameMembershipsRouter,

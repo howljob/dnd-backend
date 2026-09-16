@@ -83,7 +83,9 @@ profileRouter.post(
 );
 profileRouter.delete('/characters/:id/portrait', requireAuth, profileController.deleteCharacterPortrait);
 profileRouter.get('/rating', requireAuth, profileController.getRating);
-// T3.2: ставить оценки может только пользователь с подтверждённой почтой
+// T8.1: контекст оценки сессии — участники завершённой сессии и кого уже оценил.
+profileRouter.get('/rating/session/:sessionId', requireAuth, profileController.getRatingSessionContext);
+// T3.2 + T8.1: оценка — только с подтверждённой почтой и только участнику совместной завершённой сессии
 profileRouter.post('/rating', requireAuth, requireConfirmedEmail, profileController.submitRating);
 
 profileRouter.get('/security/sessions', requireAuth, profileController.listSecuritySessions);

@@ -1,6 +1,8 @@
 const pool = require('../../db/pool');
+const { createNotification } = require('../community/community-notifications.service');
 
 const ALLOWED_STATUSES = ['scheduled', 'live', 'finished', 'cancelled'];
+const ALLOWED_ATTENDANCE_STATUSES = ['present', 'absent'];
 const DEFAULT_UPCOMING_HOURS = 48;
 const MAX_UPCOMING_HOURS = 24 * 60; // не отдавать «ближайшие сессии» дальше, чем на 60 дней
 
@@ -271,8 +273,155 @@ async function transitionSession(auth, sessionId, action) {
     [sessionId, nextStatus]
   );
 
+  // T8.5: при завершении сессии — напоминание участникам «оцените игру».
+  if (nextStatus === 'finished') {
+    const participants = await getApprovedGameMemberIds(row.game_id, row.game_creator_id);
+    for (const userId of participants) {
+      if (userId === auth.userId) continue;
+      await createNotification({
+        userId,
+        actorUserId: auth.userId,
+        type: 'session_finished_rate',
+        entityType: 'game_session',
+        entityId: sessionId,
+        payload: {
+          gameTitle: row.game_title,
+          gameId: row.game_id
+        }
+      });
+    }
+  }
+
   const updatedRow = await getSessionRowById(sessionId);
   return mapSessionRow(updatedRow);
+}
+
+// Одобренные участники игры + создатель (мастер).
+async function getApprovedGameMemberIds(gameId, creatorId) {
+  const result = await pool.query(
+    `SELECT user_id
+     FROM game_memberships
+     WHERE game_id = $1
+       AND status = 'approved'`,
+    [gameId]
+  );
+  const ids = new Set(result.rows.map((row) => row.user_id));
+  if (creatorId) {
+    ids.add(creatorId);
+  }
+
+  return ids;
+}
+
+// T8.2: список присутствия — одобренные участники (без мастера) + отметки.
+async function getSessionAttendance(auth, sessionId) {
+  if (!auth || !isUuid(auth.userId)) {
+    throw createHttpError(401, 'Unauthorized');
+  }
+
+  if (!isUuid(sessionId)) {
+    throw createHttpError(400, 'Invalid session id');
+  }
+
+  const row = await getSessionRowById(sessionId);
+
+  if (!row) {
+    throw createHttpError(404, 'Session not found');
+  }
+
+  const memberIds = await getApprovedGameMemberIds(row.game_id, row.game_creator_id);
+  const isMaster = auth.role === 'admin' || auth.userId === row.game_creator_id;
+
+  if (!isMaster && !memberIds.has(auth.userId)) {
+    throw createHttpError(403, 'Forbidden');
+  }
+
+  const result = await pool.query(
+    `SELECT
+      m.user_id,
+      u.display_name,
+      a.status AS attendance_status
+    FROM game_memberships m
+    INNER JOIN users u ON u.id = m.user_id
+    LEFT JOIN session_attendance a
+      ON a.session_id = $2
+      AND a.user_id = m.user_id
+    WHERE m.game_id = $1
+      AND m.status = 'approved'
+      AND m.user_id <> $3
+    ORDER BY u.display_name ASC`,
+    [row.game_id, sessionId, row.game_creator_id]
+  );
+
+  return {
+    sessionId,
+    sessionStatus: row.status,
+    items: result.rows.map((item) => ({
+      userId: item.user_id,
+      displayName: item.display_name,
+      status: item.attendance_status || null
+    }))
+  };
+}
+
+// T8.2: мастер отмечает присутствие после завершения сессии.
+async function setSessionAttendance(auth, sessionId, data) {
+  if (!auth || !isUuid(auth.userId)) {
+    throw createHttpError(401, 'Unauthorized');
+  }
+
+  if (!isUuid(sessionId)) {
+    throw createHttpError(400, 'Invalid session id');
+  }
+
+  const row = await getSessionRowById(sessionId);
+
+  if (!row) {
+    throw createHttpError(404, 'Session not found');
+  }
+
+  assertGameOwnership(auth, row.game_creator_id);
+
+  if (row.status !== 'finished') {
+    throw createHttpError(400, 'Attendance can be marked only for finished sessions');
+  }
+
+  const payload = data && typeof data === 'object' ? data : {};
+  const items = Array.isArray(payload.items) ? payload.items : [];
+
+  if (items.length === 0) {
+    throw createHttpError(400, 'Attendance items are required');
+  }
+
+  const memberIds = await getApprovedGameMemberIds(row.game_id, null);
+
+  for (const item of items) {
+    const userId = typeof item?.userId === 'string' ? item.userId.trim() : '';
+    const status = typeof item?.status === 'string' ? item.status.trim().toLowerCase() : '';
+
+    if (!isUuid(userId) || !memberIds.has(userId) || userId === row.game_creator_id) {
+      throw createHttpError(400, 'Attendance can be marked only for approved game members');
+    }
+
+    if (!ALLOWED_ATTENDANCE_STATUSES.includes(status)) {
+      throw createHttpError(400, 'Invalid attendance status');
+    }
+  }
+
+  for (const item of items) {
+    await pool.query(
+      `INSERT INTO session_attendance (session_id, user_id, status, marked_by)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (session_id, user_id)
+      DO UPDATE
+      SET status = EXCLUDED.status,
+          marked_by = EXCLUDED.marked_by,
+          updated_at = now()`,
+      [sessionId, item.userId.trim(), item.status.trim().toLowerCase(), auth.userId]
+    );
+  }
+
+  return getSessionAttendance(auth, sessionId);
 }
 
 async function listSessionsByGameId(gameId) {
@@ -323,5 +472,7 @@ module.exports = {
   updateSession,
   transitionSession,
   listSessionsByGameId,
-  listUpcomingSessions
+  listUpcomingSessions,
+  getSessionAttendance,
+  setSessionAttendance
 };

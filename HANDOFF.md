@@ -8,6 +8,20 @@
 - Тесты: `test/tabletop-events.test.js` (двухклиентская рассылка ≤1 с, приватность, действия, обрыв/возврат, история; auth-кадр). `npm test` — 5/5.
 - Не тронуто по договорённости с треком T5: таблица `game_characters` и ручки `/api/tabletop/games/:id/characters`.
 
+---
+
+## 2026-09-16 — Трек T8 «Сообщество и доверие» (ветка track/t8)
+
+- **T8.1** Оценки привязаны к сессии: `user_reputation_ratings.session_id` (миграция `1789515320000`), уникальность (author, target, session). `POST /api/profile/rating` требует `sessionId` завершённой сессии, где участвовали оба; роль контекста выводится сервером (мастер → gm); повтор → 409. `GET /api/profile/rating/session/:id` — участники для экрана «Оцените игру». Легаси-оценки без session_id остаются в среднем балле.
+- **T8.2** `session_attendance` (миграция `1789515330000`): `GET/PUT /api/sessions/:id/attendance` — отмечает мастер после finish; в `GET /api/profile/rating` добавлен блок `attendance {present, total}`.
+- **T8.3** Кик и жалобы (миграция `1789515340000`): статус `kicked` у memberships (повторная заявка → 403), `PATCH /api/game-memberships/:id/kick`; модуль `reports` (`POST /api/reports` — участник той же игры, включая мастера; кикнутый может жаловаться), модуль `admin-reports` (`GET /api/admin/reports`, `PATCH .../resolve|dismiss` + admin-audit); всем админам уведомление `report_created`.
+- **T8.4** Передача игры (миграция `1789515350000`): `game_transfer_requests`, эндпойнты на `/api/games/:id/transfer-request` (create/get/approve/decline/complete). Complete — любым участником после `TRANSFER_TIMEOUT_DAYS` (из `.env`, дефолт 7, есть в `env.js`); раньше срока → 403 с датой. Передача: creator_id → кандидат, кандидат GM, старый мастер — участник; сессии/персонажи не трогаются.
+- **T8.5** Новые типы уведомлений: `game_kicked`, `report_created`, `transfer_requested`, `transfer_declined`, `transfer_completed`, `session_finished_rate` (рассылается участникам при finish сессии).
+- Проверки: `npm test` 3/3, e2e фронта 11/11 (включая новый `trust-smoke`).
+
+*(ниже — исторический handoff первых итераций, во многом устарел)*
+
+
 ## Project State
 
 - Project path: `c:\projects\dnd-backend`

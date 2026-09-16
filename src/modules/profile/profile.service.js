@@ -699,7 +699,23 @@ async function getRating(auth) {
     createdAt: toIso(row.created_at)
   }));
 
+  // T8.2: надёжность — «посещено X из Y сессий», где Y — сессии,
+  // на которых мастер отметил присутствие/неявку этого пользователя.
+  const attendanceResult = await pool.query(
+    `SELECT
+      COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE status = 'present')::int AS present
+    FROM session_attendance
+    WHERE user_id = $1`,
+    [auth.userId]
+  );
+  const attendance = {
+    present: toNumber(attendanceResult.rows[0]?.present),
+    total: toNumber(attendanceResult.rows[0]?.total)
+  };
+
   return {
+    attendance,
     total: totalRating,
     player: scoreByRole.player.avg,
     gm: scoreByRole.gm.avg,
@@ -714,13 +730,104 @@ async function getRating(auth) {
   };
 }
 
+// T8.1: сессия + игра для проверки «оценка только внутри своей завершённой сессии».
+async function getSessionForRating(sessionId) {
+  const result = await pool.query(
+    `SELECT
+      s.id,
+      s.game_id,
+      s.status,
+      s.starts_at,
+      g.creator_id,
+      g.title AS game_title
+    FROM game_sessions s
+    INNER JOIN games g ON g.id = s.game_id
+    WHERE s.id = $1
+    LIMIT 1`,
+    [sessionId]
+  );
+
+  return result.rows[0] || null;
+}
+
+// Участники сессии = одобренные участники игры + мастер (создатель) —
+// мастер считается участником всех своих сессий.
+async function getSessionParticipantRows(session) {
+  const result = await pool.query(
+    `SELECT DISTINCT ON (u.id)
+      u.id,
+      u.display_name
+    FROM users u
+    LEFT JOIN game_memberships m
+      ON m.user_id = u.id
+      AND m.game_id = $1
+      AND m.status = 'approved'
+    WHERE m.id IS NOT NULL
+      OR u.id = $2
+    ORDER BY u.id`,
+    [session.game_id, session.creator_id]
+  );
+
+  return result.rows;
+}
+
+async function getRatingSessionContext(auth, sessionId) {
+  requireAuthUser(auth);
+
+  if (!isUuid(sessionId)) {
+    throw createHttpError(400, 'Invalid session id');
+  }
+
+  const session = await getSessionForRating(sessionId);
+  if (!session) {
+    throw createHttpError(404, 'Session not found');
+  }
+
+  if (session.status !== 'finished') {
+    throw createHttpError(400, 'Session is not finished yet');
+  }
+
+  const participants = await getSessionParticipantRows(session);
+  const participantIds = new Set(participants.map((row) => row.id));
+
+  if (!participantIds.has(auth.userId)) {
+    throw createHttpError(403, 'You are not a participant of this session');
+  }
+
+  const ratedResult = await pool.query(
+    `SELECT target_user_id
+     FROM user_reputation_ratings
+     WHERE author_user_id = $1
+       AND session_id = $2`,
+    [auth.userId, sessionId]
+  );
+  const ratedIds = new Set(ratedResult.rows.map((row) => row.target_user_id));
+
+  return {
+    session: {
+      id: session.id,
+      gameId: session.game_id,
+      gameTitle: session.game_title,
+      startsAt: toIso(session.starts_at),
+      status: session.status
+    },
+    participants: participants
+      .filter((row) => row.id !== auth.userId)
+      .map((row) => ({
+        id: row.id,
+        displayName: row.display_name,
+        isMaster: row.id === session.creator_id,
+        alreadyRated: ratedIds.has(row.id)
+      }))
+  };
+}
+
 async function submitRating(auth, data) {
   requireAuthUser(auth);
   const payload = data && typeof data === 'object' ? data : {};
   const targetUserId = typeof payload.targetUserId === 'string' ? payload.targetUserId.trim() : '';
-  const contextRole = typeof payload.contextRole === 'string' ? payload.contextRole.trim().toLowerCase() : '';
+  const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : '';
   const score = Number(payload.score);
-  const gameId = typeof payload.gameId === 'string' ? payload.gameId.trim() : '';
   const comment = typeof payload.comment === 'string' ? payload.comment.trim() : '';
 
   if (!isUuid(targetUserId)) {
@@ -729,8 +836,9 @@ async function submitRating(auth, data) {
   if (targetUserId === auth.userId) {
     throw createHttpError(400, 'Cannot rate yourself');
   }
-  if (!['player', 'gm', 'social'].includes(contextRole)) {
-    throw createHttpError(400, 'Invalid context role');
+  // T8.1: оценка возможна только в привязке к сессии — «свободные» оценки закрыты.
+  if (!isUuid(sessionId)) {
+    throw createHttpError(400, 'sessionId is required: ratings are tied to a finished session');
   }
   if (!Number.isFinite(score) || score < 0 || score > 5) {
     throw createHttpError(400, 'Score must be between 0 and 5');
@@ -739,68 +847,50 @@ async function submitRating(auth, data) {
     throw createHttpError(400, 'Comment is too long');
   }
 
-  const targetUserResult = await pool.query(
-    'SELECT id FROM users WHERE id = $1 LIMIT 1',
-    [targetUserId]
-  );
-  if (!targetUserResult.rows[0]) {
-    throw createHttpError(404, 'Target user not found');
+  const session = await getSessionForRating(sessionId);
+  if (!session) {
+    throw createHttpError(404, 'Session not found');
   }
 
-  const normalizedGameId = gameId && isUuid(gameId) ? gameId : null;
-  if (gameId && !normalizedGameId) {
-    throw createHttpError(400, 'Invalid game id');
+  if (session.status !== 'finished') {
+    throw createHttpError(400, 'Only finished sessions can be rated');
   }
 
-  if (normalizedGameId) {
-    const membershipResult = await pool.query(
-      `SELECT user_id
-       FROM game_memberships
-       WHERE game_id = $1
-         AND status = 'approved'
-         AND user_id = ANY($2::uuid[])`,
-      [normalizedGameId, [auth.userId, targetUserId]]
-    );
-    const members = new Set(membershipResult.rows.map((row) => row.user_id));
-    if (!members.has(auth.userId) || !members.has(targetUserId)) {
-      throw createHttpError(400, 'Both users must be approved members of the selected game');
-    }
+  const participants = await getSessionParticipantRows(session);
+  const participantIds = new Set(participants.map((row) => row.id));
+
+  if (!participantIds.has(auth.userId)) {
+    throw createHttpError(403, 'You can rate only sessions you participated in');
   }
 
-  const existingResult = await pool.query(
-    `SELECT id
-     FROM user_reputation_ratings
-     WHERE author_user_id = $1
-       AND target_user_id = $2
-       AND context_role = $3
-       AND (
-         ($4::uuid IS NULL AND game_id IS NULL)
-         OR game_id = $4::uuid
-       )
-     LIMIT 1`,
-    [auth.userId, targetUserId, contextRole, normalizedGameId]
-  );
+  if (!participantIds.has(targetUserId)) {
+    throw createHttpError(403, 'Target user is not a participant of this session');
+  }
 
-  if (existingResult.rows[0]) {
-    await pool.query(
-      `UPDATE user_reputation_ratings
-       SET score = $2, comment = $3, created_at = now()
-       WHERE id = $1`,
-      [existingResult.rows[0].id, score, comment || null]
-    );
-  } else {
+  // Роль контекста выводится из факта: мастер игры получает оценку «как мастер».
+  const contextRole = targetUserId === session.creator_id ? 'gm' : 'player';
+
+  try {
     await pool.query(
       `INSERT INTO user_reputation_ratings (
         target_user_id,
         author_user_id,
         game_id,
+        session_id,
         context_role,
         score,
         comment
       )
-      VALUES ($1, $2, $3, $4, $5, $6)`,
-      [targetUserId, auth.userId, normalizedGameId, contextRole, score, comment || null]
+      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [targetUserId, auth.userId, session.game_id, sessionId, contextRole, score, comment || null]
     );
+  } catch (error) {
+    // Уникальный индекс: один раз за сессию на человека.
+    if (error.code === '23505') {
+      throw createHttpError(409, 'You have already rated this participant for this session');
+    }
+
+    throw error;
   }
 
   return { ok: true };
@@ -1196,6 +1286,7 @@ module.exports = {
   parseSheetColumn,
   mapCharacterRow,
   getRating,
+  getRatingSessionContext,
   listSecuritySessions,
   changePassword,
   signOutAllSessions,

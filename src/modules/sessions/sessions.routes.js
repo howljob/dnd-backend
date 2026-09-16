@@ -16,6 +16,9 @@ sessionActionsRouter.get('/upcoming', sessionsController.listUpcomingSessions);
 sessionActionsRouter.patch('/:id', requireAuth, sessionsController.updateSession);
 sessionActionsRouter.post('/:id/start', requireAuth, sessionsController.startSession);
 sessionActionsRouter.post('/:id/finish', requireAuth, sessionsController.finishSession);
+// T8.2: присутствие — читают участники, отмечает мастер после завершения.
+sessionActionsRouter.get('/:id/attendance', requireAuth, sessionsController.getSessionAttendance);
+sessionActionsRouter.put('/:id/attendance', requireAuth, sessionsController.setSessionAttendance);
 
 module.exports = {
   gameSessionsRouter,
