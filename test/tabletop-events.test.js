@@ -44,6 +44,8 @@ async function registerAndLogin(suffix) {
     displayName: `T6 ${suffix}`
   });
   assert.equal(reg.status, 201, `register: ${JSON.stringify(reg.json)}`);
+  // T3.2: создание игр требует подтверждённой почты — подтверждаем тестового пользователя напрямую
+  await pool.query('UPDATE users SET email_confirmed_at = now() WHERE email = $1', [email]);
   const login = await api('POST', '/api/auth/login', { email, password });
   assert.equal(login.status, 200, `login: ${JSON.stringify(login.json)}`);
   return { token: login.json.token, user: login.json.user };
