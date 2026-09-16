@@ -13,5 +13,8 @@ module.exports = {
   // Дополнительные origin для CORS через запятую (например, второй домен на проде)
   corsOrigins: (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
   jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
-  jwtAccessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '7d'
+  jwtAccessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '7d',
+  // T8.4: сколько дней ждём ответа мастера на запрос передачи игры.
+  // Допущение (подтвердить у пользователя): 7 дней по умолчанию.
+  transferTimeoutDays: Number(process.env.TRANSFER_TIMEOUT_DAYS) || 7
 };
