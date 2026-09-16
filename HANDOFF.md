@@ -1,5 +1,13 @@
 # DND Backend Handoff
 
+## 2026-09-16 — Трек T6 «Игровой стол» (волна 2, ветка track/t6)
+
+- **Лог событий стола:** таблица `table_events` (миграция `1789515229826`, id — bigserial для пагинации `?before=` и докачки `?after=`), привязка к live-сессии `game_sessions`, `is_private` для приватных бросков мастера. REST `GET /api/tabletop/games/:id/events`.
+- **WS-протокол** (`tabletop.ws.js`): авторизация только auth-кадром (5 с, `?token=` удалён — T6.5); новые типы `rollDice` (формула пересчитывается сервером — `src/modules/tabletop/dice.js`, crypto.randomInt; режим advantage/disadvantage) и `action` (attack/spell/ability, структура PRD §5.4.6, `payload.character` — имя персонажа для ленты); при `subscribe` — последние 100 событий; события присутствия `playerDisconnected`/`playerReconnected` при обрыве/возврате (T6.6).
+- **Консолидация T6.4:** роуты/сервис legacy `tabletop_rooms` удалены, `DROP TABLE` миграцией `1789559695575` (down восстанавливает структуру из 000017+000024).
+- Тесты: `test/tabletop-events.test.js` (двухклиентская рассылка ≤1 с, приватность, действия, обрыв/возврат, история; auth-кадр). `npm test` — 5/5.
+- Не тронуто по договорённости с треком T5: таблица `game_characters` и ручки `/api/tabletop/games/:id/characters`.
+
 ## Project State
 
 - Project path: `c:\projects\dnd-backend`

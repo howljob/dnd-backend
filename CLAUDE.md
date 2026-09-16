@@ -49,7 +49,7 @@ src/modules/<name>/
 | `/api/profile` | `profile` | профиль, **персонажи**, безопасность, достижения |
 | `/api/wiki` | `wiki` | SRD-сущности в БД |
 | `/api` | `wiki-reference` | расширенный справочный контент |
-| `/api` | `tabletop` | виртуальный стол, сцены, комнаты |
+| `/api` | `tabletop` | виртуальный стол, сцены, лог событий стола (legacy «комнаты» удалены в T6.4) |
 | `/api/admin` | `admin-*` (5 модулей) | админка и модерация — **разработка отложена** |
 | `/api/protected` | — | проверка авторизации |
 
@@ -57,7 +57,7 @@ src/modules/<name>/
 
 ## WebSocket — виртуальный стол
 
-`tabletop.ws.js`, эндпойнт `/ws/tabletop`. Типы сообщений: `subscribe`, `bundle`, `patchScene`, `publishScene`, `ping`. Статика загруженных карт раздаётся из `/uploads/vtt`.
+`tabletop.ws.js`, эндпойнт `/ws/tabletop`. **Авторизация — только первым кадром `{type:'auth', token}`** (5 секунд на auth, `?token=` в URL не поддерживается; до auth другие кадры закрывают соединение). Типы клиент→сервер: `auth`, `subscribe`, `patchScene`, `publishScene`, `rollDice`, `action`, `ping`; сервер→клиент: `authOk`, `bundle`, `events` (история при подписке), `event` (новое событие ленты), `pong`, `error`. Броски пересчитывает сервер (`dice.js`, crypto.randomInt) — клиентскому результату не доверять; события пишутся в `table_events` (приватные — только мастеру и автору). Статика загруженных карт раздаётся из `/uploads/vtt`.
 
 ## Миграции — самое опасное место
 
