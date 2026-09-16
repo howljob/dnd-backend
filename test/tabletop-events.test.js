@@ -122,6 +122,32 @@ test.after(async () => {
   await pool.end();
 });
 
+// T6.5: до auth-кадра сервер не принимает другие кадры и закрывает соединение.
+test('WS: кадр до авторизации приводит к закрытию соединения', async () => {
+  await new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsUrl);
+    let gotError = false;
+    const guard = setTimeout(() => reject(new Error('соединение не закрыто')), 4000);
+    ws.on('open', () => {
+      ws.send(JSON.stringify({ type: 'subscribe', gameId: '00000000-0000-4000-8000-000000000000' }));
+    });
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(String(raw));
+      if (msg.type === 'error' && msg.code === 401) gotError = true;
+    });
+    ws.on('close', () => {
+      clearTimeout(guard);
+      try {
+        assert.equal(gotError, true, 'не пришла ошибка 401');
+        resolve();
+      } catch (e) {
+        reject(e);
+      }
+    });
+    ws.on('error', reject);
+  });
+});
+
 test('лог событий стола: рассылка, приватность, история', async () => {
   const master = await registerAndLogin('master');
   const player = await registerAndLogin('player');

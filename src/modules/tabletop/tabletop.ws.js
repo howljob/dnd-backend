@@ -84,15 +84,22 @@ function attachTabletopWs(httpServer) {
 
   notifyTabletopGameImpl = (gameId) => broadcastBundle(gameId);
 
-  wss.on('connection', (ws, request) => {
-    const host = request.headers.host || 'localhost';
-    const url = new URL(request.url, `http://${host}`);
-    const token = url.searchParams.get('token') || '';
-    const payload = verifyWsToken(token);
-    const userId = typeof payload?.sub === 'string' ? payload.sub : null;
-
+  wss.on('connection', (ws) => {
+    // T6.5: токен НЕ принимается в query-строке (утекал в логи прокси и историю
+    // браузера). Авторизация — только первым кадром {type:'auth', token}.
     /** @type {{ ws: import('ws'), userId: string, gameId: string | null, isGm: boolean }} */
-    const client = { ws, userId: userId || '', gameId: null, isGm: false };
+    const client = { ws, userId: '', gameId: null, isGm: false };
+
+    // 5 секунд на auth-кадр, иначе соединение закрывается.
+    const authDeadline = setTimeout(() => {
+      if (!client.userId) {
+        try {
+          ws.close(4401, 'Auth timeout');
+        } catch (e) {
+          /* ignore */
+        }
+      }
+    }, 5000);
 
     ws.on('message', async (raw) => {
       let msg;
@@ -103,23 +110,24 @@ function attachTabletopWs(httpServer) {
         return;
       }
 
-      // T6.5 (переходный шаг): токен принимается первым кадром {type:'auth'},
-      // не в query-строке. Поддержка ?token= будет удалена в T6.5.
       if (msg.type === 'auth') {
         const framePayload = verifyWsToken(msg.token);
         const frameUserId = typeof framePayload?.sub === 'string' ? framePayload.sub : null;
         if (!frameUserId) {
           ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized', code: 401 }));
-          ws.close();
+          ws.close(4401, 'Unauthorized');
           return;
         }
+        clearTimeout(authDeadline);
         client.userId = frameUserId;
         ws.send(JSON.stringify({ type: 'authOk' }));
         return;
       }
 
+      // До успешного auth никакие другие кадры не принимаются.
       if (!client.userId) {
         ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized', code: 401 }));
+        ws.close(4401, 'Unauthorized');
         return;
       }
 
@@ -200,6 +208,7 @@ function attachTabletopWs(httpServer) {
     });
 
     ws.on('close', () => {
+      clearTimeout(authDeadline);
       if (client.gameId) {
         removeSubscriber(client.gameId, client);
       }
