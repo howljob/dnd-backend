@@ -286,3 +286,13 @@ Updated multiple times during debugging:
 If continuing in a new session, use something like:
 
 > Read `HANDOFF.md` in `c:\projects\dnd-backend` and continue from the current backend state. The backend already has register/login, Docker Postgres on port 55432, migrations working, and no git repo is initialized in this folder.
+
+## 2026-09-16 — Track T3 «Аккаунт» (ветка track/t3)
+
+- **Почта (T3.1):** `src/mail/mailer.js` (nodemailer) + `src/mail/templates.js` (русские шаблоны: подтверждение почты, сброс пароля). Без SMTP-переменных в `.env` — dev-режим: письмо пишется файлом в `var/outbox/<timestamp>-<тип>.html` (в `.gitignore`) + строка `[mail]` в лог. Значения-заглушки из `.env.example` считаются «не настроено». Инструкция для пользователя: `docs/email-setup.md`.
+- **Подтверждение email (T3.2):** миграция `1789515492365_account-email-confirmation` — `users.email_confirmed_at` (существующие пользователи backfill'ом подтверждены) + таблица `auth_action_tokens` (SHA-256-хэш токена, тип `confirm_email`/`password_reset`, срок, `used_at`). Эндпоинты: `POST /api/auth/confirm-email`, `POST /api/auth/resend-confirmation` (лимит 3/час), `GET /api/auth/me`. Middleware `requireConfirmedEmail` стоит на `POST /api/games` и `POST /api/profile/rating` (403 c `code: EMAIL_NOT_CONFIRMED`).
+- **Восстановление пароля (T3.3):** `POST /api/auth/forgot-password` (всегда 200, существование email не раскрывается, тихий лимит 3/час), `POST /api/auth/reset-password` (токен одноразовый, срок 1 час, отзыв ВСЕХ сессий).
+- **OAuth (T3.4):** `auth.oauth.service|controller` — `GET /api/auth/providers`, `GET /api/auth/oauth/:provider`, `GET /api/auth/oauth/:provider/callback`. Google (code flow) и VK ID (OAuth 2.1 + PKCE S256) прямыми fetch-запросами без SDK; state в httpOnly-cookie против CSRF; связка по email или создание аккаунта с `email_confirmed_at = now()`. Провайдер включается ключами в `.env` (`GOOGLE_CLIENT_ID/SECRET`, `VKID_CLIENT_ID/SECRET`, `OAUTH_CALLBACK_BASE`) — см. `docs/oauth-setup.md`. Ключей нет — `/providers` пуст, кнопок на фронте нет.
+- **Сессии и аватары (T3.5):** `POST /api/auth/logout` отзывает текущую сессию. `POST /api/profile/me/avatar` (multer, `uploads/avatars`, 2 МБ, только изображения; старый файл удаляется), статика `/uploads/avatars`, в базе относительный путь. `PATCH /api/profile/me` без поля `avatar` аватар не трогает; `avatar: null` удаляет (и файл тоже).
+- ⚠️ Для прода: nginx должен раздавать/проксировать `/uploads` на бэкенд, иначе файловые аватары не видны.
+- Тесты: `npm test` 3/3; e2e фронта `account-smoke.spec.js` покрывает весь цикл (читает письма из `var/outbox`).
