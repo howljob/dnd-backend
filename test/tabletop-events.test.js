@@ -261,12 +261,38 @@ test('лог событий стола: рассылка, приватность
     );
     assert.ok(pageBefore.json.items.every((e) => e.id < lastId));
 
-    // 6. История доступна после переподключения (свежая подписка получает events).
+    // 6. T6.6: обрыв соединения игрока → событие мастеру; возврат → событие
+    // и докачка пропущенного через свежую подписку.
+    playerWs.close();
+    const gone = await masterWs.waitFor(
+      (m) => m.type === 'event' && m.item?.type === 'playerDisconnected',
+      3000
+    );
+    assert.equal(gone.item.actorUserId, player.user.id);
+
+    // Пока игрок оффлайн, мастер бросает кубик — игрок должен получить это из истории.
+    masterWs.ws.send(JSON.stringify({ type: 'rollDice', formula: '1d6', label: 'пока игрока нет' }));
+    await masterWs.waitFor((m) => m.type === 'event' && m.item?.payload?.label === 'пока игрока нет');
+
     const reconnect = await openTableSocket(player.token, gameId);
     try {
+      const back = await masterWs.waitFor(
+        (m) => m.type === 'event' && m.item?.type === 'playerReconnected',
+        3000
+      );
+      assert.equal(back.item.actorUserId, player.user.id);
+
       const history = await reconnect.waitFor((m) => m.type === 'events');
       assert.ok(history.items.length >= 2, 'история при переподключении пуста');
       assert.equal(history.items.find((e) => e.isPrivate), undefined);
+      assert.ok(
+        history.items.some((e) => e.payload?.label === 'пока игрока нет'),
+        'пропущенный бросок не докачался'
+      );
+      assert.ok(
+        history.items.some((e) => e.type === 'playerDisconnected'),
+        'событие об уходе не в истории'
+      );
     } finally {
       reconnect.close();
     }

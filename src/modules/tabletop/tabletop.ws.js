@@ -20,6 +20,31 @@ function attachTabletopWs(httpServer) {
   const wss = new WebSocket.Server({ noServer: true });
   /** @type {Map<string, Set<{ ws: import('ws'), userId: string }>>} */
   const subscribersByGame = new Map();
+  /** T6.6: кто сейчас «оффлайн» в игре (после обрыва, до возврата). */
+  /** @type {Map<string, Set<string>>} */
+  const offlineByGame = new Map();
+
+  function hasOtherConnections(gameId, userId, exceptClient) {
+    const set = subscribersByGame.get(gameId);
+    if (!set) return false;
+    for (const c of set) {
+      if (c !== exceptClient && c.userId === userId && c.ws.readyState === WebSocket.OPEN) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async function emitPresence(gameId, type, userId) {
+    try {
+      const event = await tabletopService.createPresenceEvent(gameId, type, userId);
+      broadcastEvent(gameId, event);
+    } catch (e) {
+      // Лента присутствия не должна ронять сокет-сервер.
+      // eslint-disable-next-line no-console
+      console.error('presence event failed:', e?.message || e);
+    }
+  }
 
   function addSubscriber(gameId, client) {
     if (!subscribersByGame.has(gameId)) {
@@ -152,6 +177,13 @@ function attachTabletopWs(httpServer) {
           // История ленты: последние 100 событий (мастеру — включая приватные).
           const events = await tabletopService.listTableEvents(auth, msg.gameId, { limit: 100 });
           ws.send(JSON.stringify({ type: 'events', items: events }));
+          // T6.6: возвращение после обрыва — событие в ленту, контроль снова у владельца.
+          const offline = offlineByGame.get(msg.gameId);
+          if (offline && offline.has(client.userId)) {
+            offline.delete(client.userId);
+            if (offline.size === 0) offlineByGame.delete(msg.gameId);
+            void emitPresence(msg.gameId, 'playerReconnected', client.userId);
+          }
           return;
         }
 
@@ -209,8 +241,16 @@ function attachTabletopWs(httpServer) {
 
     ws.on('close', () => {
       clearTimeout(authDeadline);
-      if (client.gameId) {
-        removeSubscriber(client.gameId, client);
+      if (!client.gameId) return;
+      const { gameId, userId } = client;
+      removeSubscriber(gameId, client);
+      // T6.6: обрыв соединения участника — событие в ленту (если это была
+      // его последняя вкладка). Мастер и так может двигать любой токен
+      // (patchSceneState для GM не ограничен владельцем).
+      if (userId && !hasOtherConnections(gameId, userId, client)) {
+        if (!offlineByGame.has(gameId)) offlineByGame.set(gameId, new Set());
+        offlineByGame.get(gameId).add(userId);
+        void emitPresence(gameId, 'playerDisconnected', userId);
       }
     });
   });
