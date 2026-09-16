@@ -126,7 +126,7 @@ async function getGameForMemberships(gameId) {
 
 async function getMembershipByGameAndUser(gameId, userId) {
   const result = await pool.query(
-    'SELECT id FROM game_memberships WHERE game_id = $1 AND user_id = $2 LIMIT 1',
+    'SELECT id, status FROM game_memberships WHERE game_id = $1 AND user_id = $2 LIMIT 1',
     [gameId, userId]
   );
 
@@ -234,6 +234,11 @@ async function joinGame(auth, gameId, data) {
   }
 
   const existingMembership = await getMembershipByGameAndUser(gameId, auth.userId);
+
+  // T8.3: исключённый мастером участник не может вернуться за стол.
+  if (existingMembership?.status === 'kicked') {
+    throw createHttpError(403, 'You were removed from this game by the master');
+  }
 
   if (existingMembership) {
     throw createHttpError(409, 'Membership already exists');
@@ -448,10 +453,73 @@ async function cancelMembership(auth, membershipId) {
   return mapMembershipRow(updatedMembership);
 }
 
+// T8.3: мастер удаляет участника из игры; тот получает уведомление
+// и больше не может ни войти за стол, ни подать заявку повторно.
+async function kickMembership(auth, membershipId) {
+  if (!auth || !isUuid(auth.userId)) {
+    throw createHttpError(401, 'Unauthorized');
+  }
+
+  if (!isUuid(membershipId)) {
+    throw createHttpError(400, 'Invalid membership id');
+  }
+
+  const membership = await getMembershipById(membershipId);
+
+  if (!membership) {
+    throw createHttpError(404, 'Membership not found');
+  }
+
+  if (auth.role !== 'admin' && auth.userId !== membership.creator_id) {
+    throw createHttpError(403, 'Only the game master can remove participants');
+  }
+
+  if (membership.user_id === membership.creator_id) {
+    throw createHttpError(400, 'The game master cannot be kicked');
+  }
+
+  if (!['pending', 'approved'].includes(membership.status)) {
+    throw createHttpError(400, 'Membership cannot be kicked');
+  }
+
+  await pool.query(
+    `UPDATE game_memberships
+    SET status = 'kicked', updated_at = now()
+    WHERE id = $1`,
+    [membershipId]
+  );
+
+  await recordActivityEvent({
+    actorUserId: auth.userId,
+    eventType: 'game.member_kicked',
+    entityType: 'game',
+    entityId: membership.game_id,
+    payload: {
+      kickedUserId: membership.user_id
+    }
+  });
+
+  // Уведомление участнику: вас исключили из игры.
+  await createNotification({
+    userId: membership.user_id,
+    actorUserId: auth.userId,
+    type: 'game_kicked',
+    entityType: 'game',
+    entityId: membership.game_id,
+    payload: {
+      gameTitle: membership.game_title
+    }
+  });
+
+  const updatedMembership = await getMembershipById(membershipId);
+  return mapMembershipRow(updatedMembership);
+}
+
 module.exports = {
   listMembershipsByGameId,
   joinGame,
   approveMembership,
   rejectMembership,
-  cancelMembership
+  cancelMembership,
+  kickMembership
 };

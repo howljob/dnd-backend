@@ -110,10 +110,24 @@ async function cancelMembership(req, res) {
   }
 }
 
+async function kickMembership(req, res) {
+  try {
+    const membership = await membershipsService.kickMembership(req.auth, req.params.id);
+
+    return res.status(200).json({
+      ok: true,
+      membership
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
 module.exports = {
   listMemberships,
   joinGame,
   approveMembership,
   rejectMembership,
-  cancelMembership
+  cancelMembership,
+  kickMembership
 };
