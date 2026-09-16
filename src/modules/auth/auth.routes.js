@@ -1,5 +1,6 @@
 const express = require('express');
 const authController = require('./auth.controller');
+const oauthController = require('./auth.oauth.controller');
 const { requireAuth } = require('../../middleware/auth.middleware');
 
 const router = express.Router();
@@ -16,5 +17,10 @@ router.post('/resend-confirmation', requireAuth, authController.resendConfirmati
 // T3.3 — восстановление пароля
 router.post('/forgot-password', authController.forgotPassword);
 router.post('/reset-password', authController.resetPassword);
+
+// T3.4 — вход через Google / VK ID (включается ключами в .env, см. docs/oauth-setup.md)
+router.get('/providers', oauthController.listProviders);
+router.get('/oauth/:provider', oauthController.startOAuth);
+router.get('/oauth/:provider/callback', oauthController.oauthCallback);
 
 module.exports = router;
