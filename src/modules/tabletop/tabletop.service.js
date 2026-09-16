@@ -174,42 +174,9 @@ async function ensureDefaultScene(gameId) {
   );
 }
 
-async function ensureTabletopRoom(gameId) {
-  const existing = await pool.query(
-    'SELECT id FROM tabletop_rooms WHERE game_id = $1 LIMIT 1',
-    [gameId]
-  );
-  if (existing.rows[0]) {
-    return existing.rows[0].id;
-  }
-
-  const gm = await pool.query(
-    `SELECT user_id
-     FROM game_memberships
-     WHERE game_id = $1 AND member_role = 'gm' AND status = 'approved'
-     ORDER BY created_at ASC
-     LIMIT 1`,
-    [gameId]
-  );
-  const ownerId = gm.rows[0]?.user_id;
-  if (!ownerId) {
-    throw createHttpError(400, 'Game has no approved GM');
-  }
-
-  const ins = await pool.query(
-    `INSERT INTO tabletop_rooms (owner_user_id, game_id, name, player_user_ids, state)
-     VALUES ($1, $2, 'VTT', '{}'::uuid[], '{}'::jsonb)
-     RETURNING id`,
-    [ownerId, gameId]
-  );
-
-  return ins.rows[0].id;
-}
-
 async function getTabletopBundle(auth, gameId) {
   await assertGameExists(gameId);
   const { isGm } = await getMyMembership(auth, gameId);
-  await ensureTabletopRoom(gameId);
   await ensureDefaultScene(gameId);
 
   const scenesResult = await pool.query(
@@ -778,155 +745,6 @@ async function listTableEvents(auth, gameId, query = {}) {
   return result.rows.map(mapEventRow).reverse();
 }
 
-/* --- legacy tabletop_rooms (unchanged behaviour for old clients) --- */
-
-function normalizeRoomPayload(data) {
-  const payload = data && typeof data === 'object' ? data : {};
-  const name = typeof payload.name === 'string' ? payload.name.trim() : '';
-  const playerUserIdsRaw = Array.isArray(payload.playerUserIds) ? payload.playerUserIds : [];
-
-  const playerUserIds = playerUserIdsRaw
-    .map((id) => (typeof id === 'string' ? id.trim() : ''))
-    .filter((id) => isUuid(id));
-
-  if (name && name.length > 180) {
-    throw createHttpError(400, 'Room name is too long');
-  }
-
-  return {
-    name: name || 'Tabletop room',
-    playerUserIds: Array.from(new Set(playerUserIds)).slice(0, 50)
-  };
-}
-
-function normalizeStatePatch(data) {
-  const payload = data && typeof data === 'object' ? data : {};
-  const state = payload.state;
-  if (!state || typeof state !== 'object' || Array.isArray(state)) {
-    throw createHttpError(400, 'State must be an object');
-  }
-  return state;
-}
-
-function mapRoomRow(row) {
-  return {
-    id: row.id,
-    ownerUserId: row.owner_user_id,
-    gameId: row.game_id || null,
-    name: row.name,
-    playerUserIds: Array.isArray(row.player_user_ids) ? row.player_user_ids : [],
-    state: row.state && typeof row.state === 'object' ? row.state : {},
-    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
-    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at
-  };
-}
-
-async function assertRoomAccess(auth, roomId) {
-  requireAuthUser(auth);
-  if (!isUuid(roomId)) {
-    throw createHttpError(400, 'Invalid room id');
-  }
-
-  const result = await pool.query(
-    `SELECT
-      id,
-      owner_user_id,
-      game_id,
-      name,
-      player_user_ids,
-      state,
-      created_at,
-      updated_at
-    FROM tabletop_rooms
-    WHERE id = $1
-    LIMIT 1`,
-    [roomId]
-  );
-
-  const row = result.rows[0];
-  if (!row) {
-    throw createHttpError(404, 'Room not found');
-  }
-
-  if (row.game_id) {
-    try {
-      await getMyMembership(auth, row.game_id);
-      return row;
-    } catch (e) {
-      if (e.statusCode === 403 || e.statusCode === 401) {
-        throw createHttpError(403, 'Forbidden');
-      }
-      throw e;
-    }
-  }
-
-  const ownerId = row.owner_user_id;
-  const players = Array.isArray(row.player_user_ids) ? row.player_user_ids : [];
-  const hasAccess = ownerId === auth.userId || players.includes(auth.userId);
-  if (!hasAccess) {
-    throw createHttpError(403, 'Forbidden');
-  }
-
-  return row;
-}
-
-async function createRoom(auth, data) {
-  requireAuthUser(auth);
-  const payload = normalizeRoomPayload(data);
-
-  const result = await pool.query(
-    `INSERT INTO tabletop_rooms (
-      owner_user_id,
-      name,
-      player_user_ids,
-      state,
-      created_at,
-      updated_at
-    )
-    VALUES ($1, $2, $3::uuid[], '{}'::jsonb, now(), now())
-    RETURNING
-      id,
-      owner_user_id,
-      game_id,
-      name,
-      player_user_ids,
-      state,
-      created_at,
-      updated_at`,
-    [auth.userId, payload.name, payload.playerUserIds]
-  );
-
-  return mapRoomRow(result.rows[0]);
-}
-
-async function getRoom(auth, roomId) {
-  const row = await assertRoomAccess(auth, roomId);
-  return mapRoomRow(row);
-}
-
-async function patchRoomState(auth, roomId, data) {
-  await assertRoomAccess(auth, roomId);
-  const state = normalizeStatePatch(data);
-
-  const result = await pool.query(
-    `UPDATE tabletop_rooms
-     SET state = $2::jsonb, updated_at = now()
-     WHERE id = $1
-     RETURNING
-      id,
-      owner_user_id,
-      game_id,
-      name,
-      player_user_ids,
-      state,
-      created_at,
-      updated_at`,
-    [roomId, state]
-  );
-
-  return mapRoomRow(result.rows[0]);
-}
-
 module.exports = {
   DEFAULT_SCENE_STATE,
   deepMerge,
@@ -947,8 +765,5 @@ module.exports = {
   createRollEvent,
   createActionEvent,
   createPresenceEvent,
-  listTableEvents,
-  createRoom,
-  getRoom,
-  patchRoomState
+  listTableEvents
 };

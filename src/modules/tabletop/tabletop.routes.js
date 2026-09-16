@@ -10,12 +10,7 @@ const upload = multer({
 
 const tabletopRouter = express.Router();
 
-/* legacy rooms */
-tabletopRouter.post('/tabletop/rooms', requireAuth, tabletopController.createRoom);
-tabletopRouter.get('/tabletop/rooms/:id', requireAuth, tabletopController.getRoom);
-tabletopRouter.patch('/tabletop/rooms/:id/state', requireAuth, tabletopController.patchRoomState);
-
-/* game-scoped VTT */
+/* game-scoped VTT (единственная модель стола; legacy «комнаты» удалены в T6.4) */
 tabletopRouter.get('/tabletop/games/:gameId', requireAuth, tabletopController.getGameBundle);
 tabletopRouter.post('/tabletop/games/:gameId/scenes', requireAuth, tabletopController.postScene);
 tabletopRouter.patch(

@@ -17,42 +17,6 @@ function handleError(res, error) {
   });
 }
 
-async function createRoom(req, res) {
-  try {
-    const room = await tabletopService.createRoom(req.auth, req.body);
-    return res.status(201).json({
-      ok: true,
-      room
-    });
-  } catch (error) {
-    return handleError(res, error);
-  }
-}
-
-async function getRoom(req, res) {
-  try {
-    const room = await tabletopService.getRoom(req.auth, req.params.id);
-    return res.status(200).json({
-      ok: true,
-      room
-    });
-  } catch (error) {
-    return handleError(res, error);
-  }
-}
-
-async function patchRoomState(req, res) {
-  try {
-    const room = await tabletopService.patchRoomState(req.auth, req.params.id, req.body);
-    return res.status(200).json({
-      ok: true,
-      room
-    });
-  } catch (error) {
-    return handleError(res, error);
-  }
-}
-
 async function getGameBundle(req, res) {
   try {
     const data = await tabletopService.getTabletopBundle(req.auth, req.params.gameId);
@@ -206,9 +170,6 @@ async function removeGameCharacter(req, res) {
 }
 
 module.exports = {
-  createRoom,
-  getRoom,
-  patchRoomState,
   getGameBundle,
   postScene,
   patchScene,
