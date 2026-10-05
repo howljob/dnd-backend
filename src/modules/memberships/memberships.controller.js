@@ -46,7 +46,7 @@ function handleError(res, error) {
 
 async function listMemberships(req, res) {
   try {
-    const result = await membershipsService.listMembershipsByGameId(req.params.id);
+    const result = await membershipsService.listMembershipsByGameId(req.params.id, req.auth);
 
     return res.status(200).json({
       ok: true,

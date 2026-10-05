@@ -1,11 +1,12 @@
 const express = require('express');
 const membershipsController = require('./memberships.controller');
-const { requireAuth } = require('../../middleware/auth.middleware');
+const { requireAuth, optionalAuth } = require('../../middleware/auth.middleware');
 
 const gameMembershipsRouter = express.Router();
 const membershipActionsRouter = express.Router();
 
-gameMembershipsRouter.get('/:id/memberships', membershipsController.listMemberships);
+// Список открыт всем, но состав ответа зависит от того, кто спрашивает (см. сервис).
+gameMembershipsRouter.get('/:id/memberships', optionalAuth, membershipsController.listMemberships);
 gameMembershipsRouter.post('/:id/join', requireAuth, membershipsController.joinGame);
 
 membershipActionsRouter.patch('/:id/approve', requireAuth, membershipsController.approveMembership);

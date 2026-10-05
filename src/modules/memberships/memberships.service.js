@@ -71,14 +71,17 @@ function validateOptionalText(value, fieldName, maxLength) {
   return trimmed || null;
 }
 
-function mapMembershipRow(row) {
+function mapMembershipRow(row, options = {}) {
+  // Текст заявки («о себе», концепт персонажа) — личные данные автора заявки.
+  const includeApplication = options.includeApplication !== false;
+
   return {
     id: row.id,
     gameId: row.game_id,
     memberRole: row.member_role,
     status: row.status,
-    message: row.application_message || '',
-    characterConcept: row.character_concept || '',
+    message: includeApplication ? row.application_message || '' : '',
+    characterConcept: includeApplication ? row.character_concept || '' : '',
     user: {
       id: row.user_id,
       displayName: row.user_display_name,
@@ -191,7 +194,11 @@ async function countApprovedPlayers(gameId) {
   return result.rows[0].approved_players;
 }
 
-async function listMembershipsByGameId(gameId) {
+// Кто что видит в списке участников игры:
+// - мастер (создатель) и админ — все заявки с текстами;
+// - остальные, включая гостей, — только подтверждённый состав без текстов заявок
+//   и свою собственную заявку в любом статусе.
+async function listMembershipsByGameId(gameId, auth) {
   if (!isUuid(gameId)) {
     throw createHttpError(400, 'Invalid game id');
   }
@@ -203,9 +210,15 @@ async function listMembershipsByGameId(gameId) {
   }
 
   const rows = await getMembershipRowsByGameId(gameId);
+  const viewerId = auth && isUuid(auth.userId) ? auth.userId : null;
+  const canManage = Boolean(viewerId && (auth.role === 'admin' || viewerId === game.creator_id));
+  const isOwn = (row) => Boolean(viewerId && row.user_id === viewerId);
+  const visibleRows = canManage
+    ? rows
+    : rows.filter((row) => row.status === 'approved' || isOwn(row));
 
   return {
-    items: rows.map(mapMembershipRow),
+    items: visibleRows.map((row) => mapMembershipRow(row, { includeApplication: canManage || isOwn(row) })),
     summary: createSummary(rows, game.max_players)
   };
 }
