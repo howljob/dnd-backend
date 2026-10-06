@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const pool = require('../db/pool');
+const parsers = require('./wiki-parsers');
 
 const OUTPUT_DIR = process.env.WIKI_OUTPUT_DIR || 'C:/projects/dnd/output';
 const ASSETS_WIKI_DIR = process.env.WIKI_ASSETS_DIR || 'C:/projects/dnd/assets/wiki';
@@ -122,6 +123,27 @@ function extractPlainSummarySource(md) {
   }
   return sanitizeText(out.join(' ').replace(/\*\*|`|\\([[\]])/g, '$1'));
 }
+
+/**
+ * Данные, которых нет в выгрузках, собранные с dnd.su скриптом
+ * fetch-dnd-su-meta.js: русские имена монстров и признак «ритуал» у заклинаний.
+ * Файлов может не быть (тогда имена остаются английскими, ritual = null).
+ */
+function loadDndSuExtras() {
+  const read = (relPath) => {
+    try {
+      return parseJsonFile(path.join(ASSETS_WIKI_DIR, relPath));
+    } catch {
+      return {};
+    }
+  };
+  return {
+    monsterNames: read('bestiary/names-ru.json'),
+    spellMeta: read('spells/meta-dnd-su.json')
+  };
+}
+
+const importStats = { spellNameMismatch: [], monstersWithoutRuName: [] };
 
 function parseJsonFile(filePath) {
   const raw = fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
@@ -247,16 +269,35 @@ function buildFilters(section, row) {
   return filters;
 }
 
-function sanitizeRow(section, row) {
+function sanitizeRow(section, row, extras = {}) {
   const cleaned = removeLinksDeep(row || {});
-  const nameRu = sanitizeText(cleaned.name_ru || cleaned.name || '');
+  let nameRu = sanitizeText(cleaned.name_ru || cleaned.name || '');
   const nameEn = sanitizeText(cleaned.name_en || '');
-  const content = sanitizeText(cleaned.description || cleaned.article_text || '');
+  // Абзацы описания сохраняем (sanitizeText схлопывал переносы в один пробел).
+  const content = String(cleaned.description || cleaned.article_text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   const summary = firstSentence(content);
+  const source = sanitizeText(cleaned.source || '');
+  let filters = buildFilters(section, cleaned);
+  const payload = { ...cleaned, contentFormat: 'markdown' };
+
+  if (section === 'spells') {
+    const meta = extras.spellMeta?.[String(row?.link || '')] || null;
+    if (meta?.nameRu && meta.nameRu !== nameRu) {
+      // Заголовок страницы dnd.su — эталон названия.
+      importStats.spellNameMismatch.push(`${nameRu} → ${meta.nameRu}`);
+      nameRu = meta.nameRu;
+    }
+    const parsed = parsers.parseSpellData({ ...cleaned, description: content }, meta);
+    filters = { source, ...parsed.filters };
+    payload.data = parsed.data;
+  }
+
   const baseName = nameRu || nameEn || `entry-${Date.now()}`;
   const fallbackSlug = slugify(baseName, `${section}-${Math.random().toString(36).slice(2, 10)}`);
-  const source = sanitizeText(cleaned.source || '');
-  const filters = buildFilters(section, cleaned);
 
   return {
     slug: fallbackSlug,
@@ -266,7 +307,7 @@ function sanitizeRow(section, row) {
     summary,
     content,
     filters,
-    payload: cleaned
+    payload
   };
 }
 
@@ -475,6 +516,11 @@ function parseMarkdownWikiEntry(section, slug, rawMd) {
     slugFile: slug,
     contentFormat: 'markdown'
   };
+  if (section === 'races') {
+    const parsed = parsers.parseRaceData(content);
+    payload.data = parsed.data;
+    Object.assign(filters, parsed.filters);
+  }
   if (section === 'classes') {
     payload.sections = parseClassStructure(content);
     payload.meta = parseClassMeta(content);
@@ -567,24 +613,62 @@ function resolveSectionFilePath(config) {
  * name_ru в build-wiki-trimmed-sources.js), очищенное описание, готовые
  * фильтры. Здесь только досанитизация и упаковка.
  */
-function normalizeTrimmedRow(section, row) {
-  const content = sanitizeWikiMarkdown(row?.description || '');
-  const source = sanitizeText(row?.source || '');
-  const filters = { source };
-  for (const [key, value] of Object.entries(row?.filters || {})) {
-    const clean = sanitizeText(value || '');
-    if (clean) filters[key] = clean;
+function normalizeTrimmedRow(section, row, extras = {}) {
+  const slug = slugify(row?.slug, `${section}-${Math.random().toString(36).slice(2, 10)}`);
+  const rawContent = sanitizeWikiMarkdown(row?.description || '');
+  let name = sanitizeText(row?.name || '') || String(row?.slug || '');
+  let nameEn = sanitizeText(row?.name_en || '');
+  let source = sanitizeText(row?.source || '');
+  let content = rawContent;
+  let summary = '';
+  let filters = {};
+  const payload = { contentFormat: 'markdown', importedFrom: 'trimmed-json' };
+
+  if (section === 'bestiary') {
+    // Имя и книга — со страницы dnd.su (в выгрузке русского имени нет).
+    const ru = extras.monsterNames?.[slug] || extras.monsterNames?.[String(row?.slug || '')] || null;
+    if (ru?.name) {
+      name = ru.name;
+      // Поле source в выгрузке часто мусорное (кусок текста страницы) — книга с dnd.su надёжнее.
+      if (ru.source) source = ru.source;
+    } else {
+      importStats.monstersWithoutRuName.push(slug);
+    }
+    content = parsers.stripTooltipMarks(rawContent);
+    const parsed = parsers.parseMonsterStatBlock(content);
+    summary = parsed.summary;
+    filters = parsed.filters;
+    payload.data = parsed.data;
+  } else if (section === 'items') {
+    // Разбираем сырой текст: sanitizeWikiMarkdown срезает коды книг после «]».
+    const parsed = parsers.parseItemData(String(row?.description || ''), name, nameEn);
+    if (parsed.data.nameRu) name = parsed.data.nameRu;
+    if (parsed.data.nameEn) nameEn = parsed.data.nameEn;
+    // source из выгрузки бывает мусорным (список заклинаний со страницы); признак —
+    // квадратные скобки или неправдоподобная длина. Тогда берём коды книг из заголовка.
+    if (/[[\]]/.test(source) || source.length > 60) source = '';
+    if (!source && parsed.data.sourceCodes.length) source = parsed.data.sourceCodes.join(', ');
+    content = sanitizeWikiMarkdown(parsed.description);
+    summary = firstSentence(sanitizeText(content.slice(0, 4000)));
+    filters = { ...parsed.filters, source_codes: parsed.data.sourceCodes.join(', ') };
+    payload.data = parsed.data;
+  } else {
+    for (const [key, value] of Object.entries(row?.filters || {})) {
+      const clean = sanitizeText(value || '');
+      if (clean) filters[key] = clean;
+    }
+    summary = firstSentence(sanitizeText(content.slice(0, 4000)));
   }
 
   return {
-    slug: slugify(row?.slug, `${section}-${Math.random().toString(36).slice(2, 10)}`),
-    name: sanitizeText(row?.name || '') || String(row?.slug || ''),
-    nameEn: sanitizeText(row?.name_en || ''),
+    slug,
+    name,
+    nameEn,
     source,
-    summary: firstSentence(sanitizeText(content.slice(0, 4000))),
+    summary,
     content,
-    filters,
-    payload: { contentFormat: 'markdown', importedFrom: 'trimmed-json' }
+    filters: { source, ...filters },
+    payload
   };
 }
 
@@ -593,22 +677,28 @@ function normalizeFromAssetsIndex(section, item, mdContent) {
   const nameEn = sanitizeText(item?.nameEn || '');
   const source = sanitizeText(item?.source || '');
   const summary = sanitizeText(item?.summary || '');
-  const content = sanitizeWikiMarkdown(mdContent || '');
+  const fullContent = sanitizeWikiMarkdown(mdContent || '');
   const slug = sanitizeText(item?.slug || '') || slugify(name || nameEn, `${section}-${Math.random().toString(36).slice(2, 10)}`);
+  const payload = { ...removeLinksDeep(item || {}), contentFormat: 'markdown' };
+
+  // Заголовок и источник уже в шапке страницы — в тексте их не дублируем.
+  const parsed = section === 'feats'
+    ? parsers.parseFeatData(fullContent)
+    : parsers.parseBackgroundData(fullContent);
+  const content = parsed.data.description || fullContent;
+  payload.data = parsed.data;
+  // Имя из заголовка .md надёжнее индекса (в индексе черт nameEn пуст).
+  const fromMd = parseNameFromMarkdown(fullContent);
 
   return {
     slug,
-    name: name || nameEn || slug,
-    nameEn,
-    source,
-    summary: summary || firstSentence(sanitizeText(content.slice(0, 4000))),
+    name: name || fromMd.name || nameEn || slug,
+    nameEn: nameEn || fromMd.nameEn || '',
+    source: source || parseSourceFromMarkdown(fullContent),
+    summary: summary || firstSentence(parsed.summary) || firstSentence(sanitizeText(content.slice(0, 4000))),
     content,
-    filters: buildFilters(section, {
-      article_text: content.slice(0, 120000),
-      params_json: [],
-      source
-    }),
-    payload: { ...removeLinksDeep(item || {}), contentFormat: 'markdown' }
+    filters: { source: source || parseSourceFromMarkdown(fullContent), ...parsed.filters },
+    payload
   };
 }
 
@@ -639,7 +729,7 @@ async function upsertEntry(client, table, slug, normalized) {
   );
 }
 
-async function importSection(client, config) {
+async function importSection(client, config, extras) {
   const resolved = resolveSectionFilePath(config);
   if (!resolved) {
     throw new Error(`File not found for section "${config.section}". Checked: OUTPUT_DIR="${OUTPUT_DIR}", ASSETS_WIKI_DIR="${ASSETS_WIKI_DIR}"`);
@@ -656,7 +746,7 @@ async function importSection(client, config) {
     }
 
     for (const raw of rows) {
-      const normalized = normalizeTrimmedRow(config.section, raw);
+      const normalized = normalizeTrimmedRow(config.section, raw, extras);
       if (!normalized.content) continue;
       // eslint-disable-next-line no-await-in-loop
       await upsertEntry(client, config.table, normalized.slug, normalized);
@@ -675,7 +765,7 @@ async function importSection(client, config) {
     for (let index = 0; index < rows.length; index += 1) {
       const raw = rows[index];
       if (raw?.error) continue;
-      const normalized = sanitizeRow(config.section, raw);
+      const normalized = sanitizeRow(config.section, raw, extras);
       const slug = `${normalized.slug}-${index + 1}`;
 
       // eslint-disable-next-line no-await-in-loop
@@ -738,16 +828,25 @@ async function run() {
   try {
     await client.query('BEGIN');
     const stats = {};
+    const extras = loadDndSuExtras();
 
     for (const config of SECTION_CONFIG) {
       // eslint-disable-next-line no-await-in-loop
-      const count = await importSection(client, config);
+      const count = await importSection(client, config, extras);
       stats[config.section] = count;
     }
 
     await client.query('COMMIT');
     // eslint-disable-next-line no-console
     console.log('Wiki reference import completed:', stats);
+    if (importStats.monstersWithoutRuName.length) {
+      // eslint-disable-next-line no-console
+      console.warn(`Монстров без русского имени (нет в bestiary/names-ru.json): ${importStats.monstersWithoutRuName.length}`);
+    }
+    if (importStats.spellNameMismatch.length) {
+      // eslint-disable-next-line no-console
+      console.warn(`Названия заклинаний взяты с dnd.su вместо выгрузки (${importStats.spellNameMismatch.length}): ${importStats.spellNameMismatch.slice(0, 20).join('; ')}`);
+    }
   } catch (error) {
     await client.query('ROLLBACK');
     // eslint-disable-next-line no-console

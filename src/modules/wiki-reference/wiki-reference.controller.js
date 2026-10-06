@@ -40,6 +40,18 @@ async function getEntity(req, res) {
   }
 }
 
+async function searchAll(req, res) {
+  try {
+    const data = await wikiReferenceService.searchAllSections(req.query);
+    return res.status(200).json({
+      ok: true,
+      ...data
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
 async function getFilters(req, res) {
   try {
     const data = await wikiReferenceService.getReferenceFilters(req.params.section);
@@ -54,6 +66,7 @@ async function getFilters(req, res) {
 
 module.exports = {
   listEntities,
+  searchAll,
   getEntity,
   getFilters
 };
