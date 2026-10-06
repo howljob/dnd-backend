@@ -335,25 +335,30 @@ async function getReferenceEntity(sectionRaw, idOrSlug) {
     throw createHttpError(400, 'Entity id or slug is required');
   }
 
+  const columns = `public_id, slug, name, name_en, source, summary, content, filters, payload, updated_at`;
   const result = await pool.query(
-    `SELECT
-      public_id,
-      slug,
-      name,
-      name_en,
-      source,
-      summary,
-      content,
-      filters,
-      payload,
-      updated_at
-    FROM ${table}
-    WHERE public_id::text = $1 OR slug = $1
-    LIMIT 1`,
+    `SELECT ${columns} FROM ${table} WHERE public_id::text = $1 OR slug = $1 LIMIT 1`,
     [value]
   );
 
-  const row = result.rows[0];
+  let row = result.rows[0];
+
+  // Ссылки внутри текстов dnd.su («/spells/205-fireball/») приходят с фронта как
+  // «dndsu-205-fireball»: ищем запись по её слагу, по слагу с id (дубли бестиария),
+  // по id в начале/конце слага (черты, предыстории, расы) и по исходной ссылке.
+  const alias = !row && value.match(/^dndsu-(\d+)-(.+)$/);
+  if (alias) {
+    const [, id, slug] = alias;
+    const aliased = await pool.query(
+      `SELECT ${columns} FROM ${table}
+       WHERE slug = $1 OR slug = $2 OR slug LIKE $3 OR slug LIKE $4 OR payload->>'link' LIKE $5
+       ORDER BY (slug = $1) DESC, (slug = $2) DESC
+       LIMIT 1`,
+      [slug, `${slug}-${id}`, `${id}-%`, `%-${id}`, `%/${id}-%`]
+    );
+    row = aliased.rows[0];
+  }
+
   if (!row) {
     throw createHttpError(404, 'Wiki entity not found');
   }
