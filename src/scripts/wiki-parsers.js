@@ -360,6 +360,9 @@ function parseMonsterStatBlock(rawDescription) {
     alignment: data.alignment,
     challenge: data.challenge,
     cr_value: data.challengeValue,
+    // КД и хиты — для карточки в списке (детальная ручка отдаёт полный статблок в data)
+    ac: data.armorClass,
+    hp: data.hitPoints,
     habitat: data.habitat,
     legendary: data.legendaryActions.length > 0
   };
