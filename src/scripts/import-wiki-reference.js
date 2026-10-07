@@ -13,7 +13,9 @@ const SECTION_CONFIG = [
   { section: 'backgrounds', table: 'wiki_backgrounds', file: 'backgrounds-non-homebrew-all.json' },
   { section: 'feats', table: 'wiki_feats', file: 'feats-non-homebrew-all.json' },
   { section: 'bestiary', table: 'wiki_bestiary', file: 'bestiary-non-homebrew-all.json' },
-  { section: 'items', table: 'wiki_items', file: 'items-non-homebrew-all.json' }
+  { section: 'items', table: 'wiki_items', file: 'items-non-homebrew-all.json' },
+  // Состояния: статья dnd.su, докачанная fetch-dnd-su-meta.js в assets/wiki/conditions.
+  { section: 'conditions', table: 'wiki_conditions', file: 'conditions.json' }
 ];
 
 function slugify(value, fallback) {
@@ -599,6 +601,13 @@ function resolveSectionFilePath(config) {
     }
   }
 
+  if (config.section === 'conditions') {
+    const conditionsPath = path.join(ASSETS_WIKI_DIR, 'conditions', 'conditions.json');
+    if (fs.existsSync(conditionsPath)) {
+      return { kind: 'conditions-json', filePath: conditionsPath };
+    }
+  }
+
   const outputPath = path.join(OUTPUT_DIR, config.file);
   if (fs.existsSync(outputPath)) {
     return { kind: 'json-array', filePath: outputPath };
@@ -669,6 +678,33 @@ function normalizeTrimmedRow(section, row, extras = {}) {
     content,
     filters: { source, ...filters },
     payload
+  };
+}
+
+/**
+ * Состояние из conditions.json: текст уже markdown (пункты, абзацы, таблица
+ * истощения), в data — список эффектов простым текстом для стола и подсказок.
+ */
+function normalizeConditionRow(row) {
+  const slug = slugify(row?.slug, '');
+  const name = sanitizeText(row?.name || '');
+  if (!slug || !name) return null;
+  const effects = Array.isArray(row?.effects) ? row.effects.map((e) => sanitizeText(e)).filter(Boolean) : [];
+  const content = String(row?.text || '').trim();
+  const summary = effects[0] || firstSentence(sanitizeText(content.slice(0, 2000)));
+  return {
+    slug,
+    name,
+    nameEn: sanitizeText(row?.name_en || ''),
+    source: '',
+    summary,
+    content,
+    filters: {},
+    payload: {
+      contentFormat: 'markdown',
+      importedFrom: 'conditions-json',
+      data: { effects, url: String(row?.url || '') }
+    }
   };
 }
 
@@ -753,6 +789,21 @@ async function importSection(client, config, extras) {
       imported += 1;
     }
 
+    return imported;
+  }
+
+  if (resolved.kind === 'conditions-json') {
+    const rows = parseJsonFile(resolved.filePath);
+    if (!Array.isArray(rows)) {
+      throw new Error(`Invalid JSON structure in ${resolved.filePath}`);
+    }
+    for (const raw of rows) {
+      const normalized = normalizeConditionRow(raw);
+      if (!normalized || !normalized.content) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await upsertEntry(client, config.table, normalized.slug, normalized);
+      imported += 1;
+    }
     return imported;
   }
 

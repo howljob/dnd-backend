@@ -7,7 +7,8 @@ const SECTION_CONFIG = {
   backgrounds: { table: 'wiki_backgrounds', entityType: 'background' },
   feats: { table: 'wiki_feats', entityType: 'feat' },
   bestiary: { table: 'wiki_bestiary', entityType: 'monster' },
-  items: { table: 'wiki_items', entityType: 'item' }
+  items: { table: 'wiki_items', entityType: 'item' },
+  conditions: { table: 'wiki_conditions', entityType: 'condition' }
 };
 
 /**
@@ -53,7 +54,8 @@ const FILTER_FIELDS = {
     { key: 'rarity', kind: 'select', order: 'rarity' },
     { key: 'attunement', kind: 'boolean' },
     { key: 'source', kind: 'select' }
-  ]
+  ],
+  conditions: []
 };
 
 const RARITY_ORDER = ['обычный', 'необычный', 'редкий', 'очень редкий', 'легендарный', 'артефакт', 'варьируется'];
@@ -357,6 +359,24 @@ async function getReferenceEntity(sectionRaw, idOrSlug) {
       [slug, `${slug}-${id}`, `${id}-%`, `%-${id}`, `%/${id}-%`]
     );
     row = aliased.rows[0];
+  }
+
+  // Ссылка по английскому названию («en:magic missile») — так в текстах монстров
+  // записаны заклинания: «волшебная стрела [magic missile]». Сравниваем без
+  // пунктуации и регистра, чтобы «Tasha's hideous laughter» нашлось по «tashas hideous laughter».
+  const byEnglish = !row && value.match(/^en:(.+)$/i);
+  if (byEnglish) {
+    const normalized = byEnglish[1].toLowerCase().replace(/[^a-z0-9]+/g, '');
+    if (normalized) {
+      const found = await pool.query(
+        `SELECT ${columns} FROM ${table}
+         WHERE regexp_replace(lower(name_en), '[^a-z0-9]+', '', 'g') = $1
+         ORDER BY updated_at DESC
+         LIMIT 1`,
+        [normalized]
+      );
+      row = found.rows[0];
+    }
   }
 
   if (!row) {

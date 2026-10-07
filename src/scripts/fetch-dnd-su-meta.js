@@ -3,19 +3,21 @@
  *  - бестиарий: русское имя и книга-источник монстра (из <title> страницы:
  *    «Древний зеленый дракон / Бестиарий D&D 5 / Monster Manual»);
  *  - заклинания: признак «ритуал» и строка «уровень, школа» для сверки
- *    (из <li class="size-type-alignment">1 уровень, прорицание (ритуал)</li>).
+ *    (из <li class="size-type-alignment">1 уровень, прорицание (ритуал)</li>);
+ *  - состояния (испуганный, отравленный, …): статья «Состояния» целиком.
  *
  * Результат кладётся в assets/wiki фронтенда и коммитится — импортёр читает
  * его оттуда, на сервере в интернет ходить не нужно:
- *   bestiary/names-ru.json   { [slug]: { name, source, url } }
- *   spells/meta-dnd-su.json  { [link]: { nameRu, nameEn, ritual, typeLine } }
+ *   bestiary/names-ru.json      { [slug]: { name, source, url } }
+ *   spells/meta-dnd-su.json     { [link]: { nameRu, nameEn, ritual, typeLine } }
+ *   conditions/conditions.json  [ { slug, name, name_en, text, effects, url } ]
  *
  * Скрипт докачивает: записи, которые уже есть в файле, не запрашиваются.
  * Ничего не выдумывает: если страница не отдала заголовок, записи нет.
  *
  * Запуск (сырой дамп бестиария нужен ради url каждой страницы):
  *   WIKI_OUTPUT_DIR=C:/projects/dnd/output WIKI_ASSETS_DIR=C:/projects/dnd/assets/wiki \
- *   node src/scripts/fetch-dnd-su-meta.js [bestiary|spells|all]
+ *   node src/scripts/fetch-dnd-su-meta.js [bestiary|spells|conditions|all]
  */
 const fs = require('fs');
 const path = require('path');
@@ -222,10 +224,103 @@ async function fetchSpellMeta() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Состояния (frightened, poisoned, …) — одна статья dnd.su «Состояния».
+// Результат: conditions/conditions.json — массив { slug, name, name_en, text, effects, url }.
+// text — markdown (пункты, абзацы, таблица степеней истощения), ссылки на другие
+// состояния и заклинания сохранены как внутренние ссылки dnd.su.
+// ---------------------------------------------------------------------------
+const CONDITIONS_URL = 'https://dnd.su/articles/mechanics/27-conditions/';
+
+function htmlInlineToMarkdown(html) {
+  return String(html || '')
+    // ссылки на другие состояния («#incapacitated») и на записи dnd.su («/spells/25-thunderwave/»)
+    .replace(/<a\b[^>]*href="#([a-z-]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_, slug, label) => `[${label.replace(/<[^>]+>/g, '')}](/conditions/${slug}/)`)
+    .replace(/<a\b[^>]*href="(\/(?:spells|bestiary|items|feats|backgrounds|race|class)\/\d+-[^"/]+\/?)"[^>]*>([\s\S]*?)<\/a>/gi, (_, href, label) => `[${label.replace(/<[^>]+>/g, '')}](${href})`)
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseConditionsArticle(html) {
+  const start = html.indexOf('<h3 class="underlined"');
+  const end = html.indexOf('<h2 class="card-title">Комментарии');
+  if (start < 0) throw new Error('Не найдено ни одного заголовка состояния');
+  const body = html.slice(start, end > start ? end : undefined);
+  const blocks = body.split(/<h3 class="underlined"/i).slice(1);
+  const result = [];
+
+  for (const block of blocks) {
+    const headEnd = block.indexOf('</h3>');
+    const head = block.slice(0, headEnd);
+    const rest = block.slice(headEnd + 5);
+    const slug = (head.match(/id=['"]([a-z-]+)['"]/i) || [])[1];
+    const nameEn = decodeEntities((head.match(/title="([A-Za-z -]+)"/) || [])[1] || '');
+    // head начинается с хвоста открывающего тега («…>»), затем вложенные span.
+    const name = decodeEntities(head.replace(/^[^>]*>/, '').replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
+    if (!slug || !name) continue;
+
+    const lines = [];
+    const effects = [];
+    const tokenRe = /<ul>([\s\S]*?)<\/ul>|<table>([\s\S]*?)<\/table>|<p>([\s\S]*?)<\/p>/gi;
+    let m;
+    while ((m = tokenRe.exec(rest)) !== null) {
+      if (m[1] !== undefined) {
+        const items = [...m[1].matchAll(/<li>([\s\S]*?)<\/li>/gi)].map((li) => decodeEntities(htmlInlineToMarkdown(li[1]))).filter(Boolean);
+        for (const item of items) {
+          lines.push(`- ${item}`);
+          effects.push(item.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1'));
+        }
+        lines.push('');
+      } else if (m[2] !== undefined) {
+        const rows = [...m[2].matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((tr) => (
+          [...tr[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((td) => decodeEntities(htmlInlineToMarkdown(td[1])))
+        )).filter((cells) => cells.length);
+        if (rows.length) {
+          lines.push(`| ${rows[0].join(' | ')} |`);
+          lines.push(`| ${rows[0].map(() => '---').join(' | ')} |`);
+          for (const cells of rows.slice(1)) lines.push(`| ${cells.join(' | ')} |`);
+          lines.push('');
+        }
+      } else if (m[3] !== undefined) {
+        const text = decodeEntities(htmlInlineToMarkdown(m[3]));
+        if (text) {
+          lines.push(text);
+          lines.push('');
+        }
+      }
+    }
+
+    result.push({
+      slug,
+      name,
+      name_en: nameEn,
+      text: lines.join('\n').trim(),
+      effects,
+      url: `${CONDITIONS_URL}#${slug}`
+    });
+  }
+  return result;
+}
+
+async function fetchConditions() {
+  const outPath = path.join(ASSETS_WIKI_DIR, 'conditions', 'conditions.json');
+  const { status, html } = await fetchHead(CONDITIONS_URL, '<h2 class="card-title">Комментарии', 1500000);
+  if (status !== 200 || !html) throw new Error(`Статья состояний не загрузилась: HTTP ${status}`);
+  const conditions = parseConditionsArticle(html);
+  if (conditions.length < 10) throw new Error(`Разобрано подозрительно мало состояний: ${conditions.length}`);
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, `${JSON.stringify(conditions, null, 2)}\n`, 'utf8');
+  // eslint-disable-next-line no-console
+  console.log(`Состояния готовы: ${conditions.length} → ${outPath}`);
+}
+
 async function run() {
   const what = String(process.argv[2] || 'all').toLowerCase();
   if (what === 'bestiary' || what === 'all') await fetchBestiaryNames();
   if (what === 'spells' || what === 'all') await fetchSpellMeta();
+  if (what === 'conditions' || what === 'all') await fetchConditions();
 }
 
 if (require.main === module) {
@@ -236,4 +331,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseTitle, decodeEntities };
+module.exports = { parseTitle, decodeEntities, parseConditionsArticle };

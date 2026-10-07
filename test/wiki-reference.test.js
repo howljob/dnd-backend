@@ -103,4 +103,28 @@ test('вики: поиск, фильтры, сортировки, данные �
   assert.equal(detail.json.item.data.school, 'Воплощение');
   assert.ok(detail.json.item.data.components.material);
   assert.ok(detail.json.item.data.classes.includes('волшебник'));
+
+  // Заклинание по английскому имени — так они записаны в текстах монстров («волшебная стрела [magic missile]»).
+  const byEn = await get(`/api/wiki/reference/spells/entities/${encodeURIComponent('en:magic missile')}`);
+  assert.equal(byEn.status, 200);
+  assert.equal(byEn.json.item.name, 'Волшебная стрела');
+  const byEnPunct = await get(`/api/wiki/reference/spells/entities/${encodeURIComponent("en:Tasha's hideous laughter")}`);
+  assert.equal(byEnPunct.status, 200);
+  assert.equal(byEnPunct.json.item.data.level, 1);
+
+  // Раздел «Состояния»: 15 записей с dnd.su, эффекты списком, текст markdown с таблицей истощения.
+  const conditions = await get('/api/wiki/reference/conditions/entities?limit=50');
+  assert.equal(conditions.status, 200);
+  assert.equal(conditions.json.total, 15);
+  const frightened = await get('/api/wiki/reference/conditions/entities/frightened');
+  assert.equal(frightened.json.item.name, 'Испуганный');
+  assert.equal(frightened.json.item.entityType, 'condition');
+  assert.equal(frightened.json.item.data.effects.length, 2);
+  const exhaustion = await get('/api/wiki/reference/conditions/entities/exhaustion');
+  assert.ok(/\| Степень \| Эффект \|/.test(exhaustion.json.item.content));
+
+  // Статблок монстра: после знака подсказки «?» dnd.su иммунитеты чистые.
+  const flameskull = await get('/api/wiki/reference/bestiary/entities/flameskull');
+  assert.equal(flameskull.json.item.name, 'Пылающий череп');
+  assert.ok(!/\?/.test(flameskull.json.item.data.conditionImmunities), flameskull.json.item.data.conditionImmunities);
 });
