@@ -54,6 +54,37 @@ function estimateDataUrlBytes(dataUrl) {
  * отбрасываются (файлы портретов — отдельный эндпойнт, T5.2). Легаси-портрет
  * из БД сохраняет вызывающая сторона через preservedLegacyPortrait.
  */
+/** Формула костей как её понимает движок бросков стола: «2d6+3», «1d20-1», «1d8+1d6+2». */
+const DICE_FORMULA_RE = /^(\d{0,2}d\d{1,4}|\d{1,4})([+-](\d{0,2}d\d{1,4}|\d{1,4})){0,9}$/i;
+
+function normalizeDiceFormula(value) {
+  const text = String(value ?? '').trim().toLowerCase().replace(/\s+/g, '').replace(/к/g, 'd');
+  if (!text || text.length > 60 || !DICE_FORMULA_RE.test(text) || !/d/.test(text)) return '';
+  return text;
+}
+
+/**
+ * Свои формулы оружия: объект «название → { hit, damage }», до 30 записей;
+ * пустые и некорректные формулы отбрасываются, запись без формул не хранится.
+ */
+function normalizeWeaponOverrides(raw) {
+  if (raw === null || typeof raw === 'undefined') return {};
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw createHttpError(400, 'Sheet weaponOverrides must be an object');
+  }
+  const result = {};
+  for (const [key, value] of Object.entries(raw).slice(0, 60)) {
+    const name = cappedText(key, 300);
+    if (!name || !value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const hit = normalizeDiceFormula(value.hit);
+    const damage = normalizeDiceFormula(value.damage);
+    if (!hit && !damage) continue;
+    result[name] = { ...(hit ? { hit } : {}), ...(damage ? { damage } : {}) };
+    if (Object.keys(result).length >= 30) break;
+  }
+  return result;
+}
+
 function normalizeSheet(rawSheet, level, options = {}) {
   const source = rawSheet && typeof rawSheet === 'object' && !Array.isArray(rawSheet) ? rawSheet : {};
 
@@ -149,6 +180,10 @@ function normalizeSheet(rawSheet, level, options = {}) {
     ? source.personality
     : {};
 
+  // Свои формулы попадания/урона для оружия из листа (шестерёнка у кнопки «Урон» за столом):
+  // { "Секира Гурта": { hit: "1d20+6", damage: "3d12+4" } }. Ключ — название строки снаряжения.
+  const weaponOverrides = normalizeWeaponOverrides(source.weaponOverrides);
+
   const sheet = {
     sheetVersion: 2,
     level: String(clampInt(level, 1, 20, 1)),
@@ -167,7 +202,8 @@ function normalizeSheet(rawSheet, level, options = {}) {
       ideals: cappedText(personalitySource.ideals, 500),
       bonds: cappedText(personalitySource.bonds, 500),
       flaws: cappedText(personalitySource.flaws, 500)
-    }
+    },
+    weaponOverrides
   };
 
   // Легаси-портрет сохраняется только сервером (из БД), с клиента — никогда.
