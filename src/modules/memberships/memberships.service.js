@@ -260,7 +260,10 @@ async function joinGame(auth, gameId, data) {
   const memberRole = validateRequestedRole(data);
   const payload = data && typeof data === 'object' ? data : {};
   const applicationMessage = validateOptionalText(payload.message, 'message', 2000);
-  const characterConcept = validateOptionalText(payload.characterConcept, 'characterConcept', 500);
+  // Концепция персонажа имеет смысл только для игрока; у заявки мастера её нет.
+  const characterConcept = memberRole === 'gm'
+    ? null
+    : validateOptionalText(payload.characterConcept, 'characterConcept', 500);
 
   try {
     const insertResult = await pool.query(
