@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const pool = require('../../db/pool');
 const dice = require('./dice');
 const profileService = require('../profile/profile.service');
+const portraitStorage = require('../profile/portrait-storage');
 
 const UPLOADS_VTT_DIR = path.join(process.cwd(), 'uploads', 'vtt');
 const ALLOWED_IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
@@ -12,6 +13,10 @@ const MAX_MAP_BYTES = 12 * 1024 * 1024;
 const MAX_TOKEN_IMAGE_BYTES = 4 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
 const UPLOAD_FILE_RE = /^\/uploads\/vtt\/[a-f0-9]{32}\.(png|jpg|webp|gif|mp3|ogg|wav)$/i;
+// Портрет персонажа (uploads/portraits) тоже годится картинкой токена.
+const PORTRAIT_URL_RE = /^\/uploads\/portraits\/[A-Za-z0-9_.-]+\.(png|jpe?g|webp|gif)$/i;
+const TOKEN_SIZE_MIN = 16;
+const TOKEN_SIZE_MAX = 1600;
 
 /** Виды файлов библиотеки стола: карта, картинка токена, музыка. */
 const FILE_KINDS = {
@@ -178,11 +183,19 @@ function sanitizeToken(token) {
   if ('conditions' in out) out.conditions = sanitizeTokenConditions(out.conditions);
   if ('gmNote' in out) out.gmNote = shortText(out.gmNote, 2000);
   if ('label' in out) out.label = shortText(out.label, 80);
-  // Картинка токена — только файл из библиотеки игры (/uploads/vtt/…).
+  // Картинка токена — файл из библиотеки игры (/uploads/vtt/…) или портрет персонажа.
   if ('imageUrl' in out) {
     const url = shortText(out.imageUrl, 200);
-    out.imageUrl = url && UPLOAD_FILE_RE.test(url) && !/\.(mp3|ogg|wav)$/i.test(url) ? url : null;
+    const fromLibrary = url && UPLOAD_FILE_RE.test(url) && !/\.(mp3|ogg|wav)$/i.test(url);
+    out.imageUrl = fromLibrary || (url && PORTRAIT_URL_RE.test(url)) ? url : null;
   }
+  // Размер — в пикселях карты, в разумных пределах.
+  if ('size' in out) {
+    const size = Number(out.size);
+    out.size = Number.isFinite(size) ? Math.min(TOKEN_SIZE_MAX, Math.max(TOKEN_SIZE_MIN, Math.round(size))) : 48;
+  }
+  // Закреплён на карте: часть карты, никто не двигает (снять может только мастер).
+  if ('locked' in out) out.locked = Boolean(out.locked);
   return out;
 }
 
@@ -443,11 +456,14 @@ async function patchSceneState(auth, gameId, sceneId, body) {
       const ex = byId.get(raw.id);
       if (!ex || ex.ownerUserId !== auth.userId) continue;
       // Владелец токена: положение, размер, хиты и состояния. Заметки мастера,
-      // владелец, скрытость и подпись — только мастер.
+      // владелец, скрытость, подпись и закрепление — только мастер.
+      // Закреплённый токен — часть карты: игрок его не двигает и не меняет размер.
       const t = sanitizeToken(raw);
-      if (typeof t.x === 'number') ex.x = t.x;
-      if (typeof t.y === 'number') ex.y = t.y;
-      if (typeof t.size === 'number') ex.size = t.size;
+      if (!ex.locked) {
+        if (typeof t.x === 'number') ex.x = t.x;
+        if (typeof t.y === 'number') ex.y = t.y;
+        if (typeof t.size === 'number') ex.size = t.size;
+      }
       for (const key of TOKEN_HP_FIELDS) {
         if (key in t) ex[key] = t[key];
       }
@@ -742,7 +758,7 @@ async function listGameCharacters(auth, gameId) {
   await getMyMembership(auth, gameId);
 
   const result = await pool.query(
-    `SELECT gc.id, gc.character_id, gc.user_id, uc.name, uc.level, uc.class_name, uc.game_system
+    `SELECT gc.id, gc.character_id, gc.user_id, uc.name, uc.level, uc.class_name, uc.game_system, uc.portrait_path
      FROM game_characters gc
      INNER JOIN user_characters uc ON uc.id = gc.character_id
      WHERE gc.game_id = $1
@@ -757,7 +773,9 @@ async function listGameCharacters(auth, gameId) {
     name: row.name,
     level: row.level,
     className: row.class_name,
-    gameSystem: row.game_system
+    gameSystem: row.game_system,
+    // Портрет персонажа — токен берёт его картинкой автоматически.
+    portraitUrl: row.portrait_path ? portraitStorage.portraitUrl(row.portrait_path) : null
   }));
 }
 

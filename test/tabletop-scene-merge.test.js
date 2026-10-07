@@ -82,6 +82,23 @@ test('токен: значения приводятся к безопасным'
   assert.ok(t.conditions[0].label.length <= 40 && t.conditions[0].icon.length <= 8);
 });
 
+test('токен: картинка — из библиотеки или портрет персонажа, размер в пределах, закрепление — булево', () => {
+  const lib = sanitizeToken({ id: 'a', imageUrl: '/uploads/vtt/0123456789abcdef0123456789abcdef.png' });
+  assert.equal(lib.imageUrl, '/uploads/vtt/0123456789abcdef0123456789abcdef.png');
+  const portrait = sanitizeToken({ id: 'a', imageUrl: '/uploads/portraits/abc-123_x.jpg' });
+  assert.equal(portrait.imageUrl, '/uploads/portraits/abc-123_x.jpg');
+  const bad = sanitizeToken({ id: 'a', imageUrl: 'https://evil.example/x.png' });
+  assert.equal(bad.imageUrl, null);
+  const traversal = sanitizeToken({ id: 'a', imageUrl: '/uploads/portraits/../../.env' });
+  assert.equal(traversal.imageUrl, null);
+  assert.equal(sanitizeToken({ id: 'a', size: 5 }).size, 16);
+  assert.equal(sanitizeToken({ id: 'a', size: 99999 }).size, 1600);
+  assert.equal(sanitizeToken({ id: 'a', size: 'abc' }).size, 48);
+  assert.equal(sanitizeToken({ id: 'a', size: 140.4 }).size, 140);
+  assert.equal(sanitizeToken({ id: 'a', locked: 'yes' }).locked, true);
+  assert.equal(sanitizeToken({ id: 'a', locked: 0 }).locked, false);
+});
+
 test('сцена: остальные поля патча сливаются как раньше', () => {
   const next = mergeScenePatch(base(), { tokens: [{ id: 'a', x: 5, y: 5, size: 48 }], grid: { enabled: true } });
   assert.equal(next.grid.enabled, true);
