@@ -253,7 +253,11 @@ async function joinGame(auth, gameId, data) {
     throw createHttpError(403, 'You were removed from this game by the master');
   }
 
-  if (existingMembership) {
+  // Отменённую или отклонённую заявку можно подать заново — старая запись возвращается в «ожидает».
+  const canReapply = existingMembership
+    && (existingMembership.status === 'cancelled' || existingMembership.status === 'rejected');
+
+  if (existingMembership && !canReapply) {
     throw createHttpError(409, 'Membership already exists');
   }
 
@@ -266,14 +270,27 @@ async function joinGame(auth, gameId, data) {
     : validateOptionalText(payload.characterConcept, 'characterConcept', 500);
 
   try {
-    const insertResult = await pool.query(
-      `INSERT INTO game_memberships (game_id, user_id, member_role, status, application_message, character_concept)
-      VALUES ($1, $2, $3, 'pending', $4, $5)
-      RETURNING id`,
-      [gameId, auth.userId, memberRole, applicationMessage, characterConcept]
-    );
+    let membershipId;
+    if (canReapply) {
+      const updateResult = await pool.query(
+        `UPDATE game_memberships
+         SET member_role = $2, status = 'pending', application_message = $3, character_concept = $4, updated_at = now()
+         WHERE id = $1
+         RETURNING id`,
+        [existingMembership.id, memberRole, applicationMessage, characterConcept]
+      );
+      membershipId = updateResult.rows[0].id;
+    } else {
+      const insertResult = await pool.query(
+        `INSERT INTO game_memberships (game_id, user_id, member_role, status, application_message, character_concept)
+        VALUES ($1, $2, $3, 'pending', $4, $5)
+        RETURNING id`,
+        [gameId, auth.userId, memberRole, applicationMessage, characterConcept]
+      );
+      membershipId = insertResult.rows[0].id;
+    }
 
-    const membership = await getMembershipById(insertResult.rows[0].id);
+    const membership = await getMembershipById(membershipId);
     await recordActivityEvent({
       actorUserId: auth.userId,
       eventType: 'game.join_requested',
