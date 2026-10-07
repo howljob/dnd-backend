@@ -868,7 +868,8 @@ async function removeGameCharacter(auth, gameId, linkId) {
 
 /* --- T6.1: серверный лог событий стола (table_events) --- */
 
-const EVENT_TYPES = new Set(['roll', 'action', 'playerDisconnected', 'playerReconnected']);
+const EVENT_TYPES = new Set(['roll', 'action', 'chat', 'playerDisconnected', 'playerReconnected']);
+const CHAT_MAX_LENGTH = 1000;
 const ACTION_TYPES = new Set(['attack', 'spell', 'ability']);
 // healing — бросок лечения заклинанием («Лечение ран»), считается как урон, но подписывается иначе.
 const ROLL_KINDS = new Set(['hit', 'damage', 'check', 'healing']);
@@ -1085,6 +1086,28 @@ async function createActionEvent(auth, gameId, data) {
   });
 }
 
+/**
+ * Сообщение чата в ленте стола: любой участник игры, текст до 1000 знаков,
+ * переводы строк сохраняются, видно всем за столом.
+ */
+async function createChatEvent(auth, gameId, data) {
+  await getMyMembership(auth, gameId);
+  const raw = data && typeof data === 'object' && typeof data.text === 'string' ? data.text : '';
+  const text = raw.replace(/\r\n?/g, '\n').trim().slice(0, CHAT_MAX_LENGTH);
+  if (!text) {
+    throw createHttpError(400, 'Chat message is empty');
+  }
+  const actorName = await getUserDisplayName(auth.userId);
+  return insertTableEvent({
+    gameId,
+    type: 'chat',
+    actorUserId: auth.userId,
+    actorName,
+    payload: { text },
+    isPrivate: false
+  });
+}
+
 /** Служебное событие (отключение/возврат игрока) — пишет сам сервер. */
 async function createPresenceEvent(gameId, type, userId) {
   if (type !== 'playerDisconnected' && type !== 'playerReconnected') {
@@ -1174,6 +1197,7 @@ module.exports = {
   mapSceneRow,
   createRollEvent,
   createActionEvent,
+  createChatEvent,
   createPresenceEvent,
   listTableEvents
 };
