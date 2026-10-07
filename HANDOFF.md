@@ -1,5 +1,20 @@
 # DND Backend Handoff
 
+## 2026-10-07 — Токены: портрет персонажа, размер, закрепление (ветка fix/tokens-2)
+
+- `listGameCharacters` отдаёт `portraitUrl` (uploads/portraits) — фронт ставит портрет картинкой токена при связывании и показывает его у токенов персонажей без своей картинки.
+- `sanitizeToken`: `imageUrl` принимает и `/uploads/portraits/<имя>.(png|jpg|webp|gif)` (PORTRAIT_URL_RE), `size` зажимается 16…1600 px (не число → 48), `locked` — булево. Закреплённый токен (`locked`) — часть карты: в патче игрока его x/y/size игнорируются (мастер может всё).
+- Тест: `test/tabletop-scene-merge.test.js`. `npm test` — 18/18.
+
+---
+
+## 2026-10-07 — Чат в ленте стола (ветка fix/tabletop-chat)
+
+- Новый кадр WebSocket `chat` {text}: любой участник игры, текст до 1000 знаков (CHAT_MAX_LENGTH), переводы строк сохраняются, пустое → 400. `createChatEvent` пишет в `table_events` тип `chat` (payload {text}, не приватное), рассылается всем подписчикам как обычное событие; в REST-истории и при подписке отдаётся вместе с бросками. Миграций нет (у `type` нет ограничения в БД).
+- Тест: `test/tabletop-events.test.js` (шаг 3б). `npm test` — 17/17.
+
+---
+
 ## 2026-10-07 — Музыка стола и библиотека с видами файлов (ветка fix/tabletop-music)
 
 - **Загрузка в библиотеку** — `POST /api/tabletop/games/:id/files` (multipart: `file` + `kind` = `map` | `image` | `audio`), только мастер. Пределы по виду: карта 12 МБ (png/jpeg/webp/gif), картинка токена 4 МБ, музыка 20 МБ (`audio/mpeg|mp3|ogg|wav`); коды ошибок `FILE_TOO_LARGE`, `INVALID_IMAGE_TYPE`, `INVALID_AUDIO_TYPE`. Старый `map-upload` остаётся обёрткой над `saveUploadedFile(…, 'map')`. Имя файла перекодируется из latin1 (multer) — русские названия больше не кракозябры. На проде nginx `client_max_body_size` нужно поднять до 25m.
