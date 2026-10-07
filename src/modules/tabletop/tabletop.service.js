@@ -740,7 +740,8 @@ async function removeGameCharacter(auth, gameId, linkId) {
 
 const EVENT_TYPES = new Set(['roll', 'action', 'playerDisconnected', 'playerReconnected']);
 const ACTION_TYPES = new Set(['attack', 'spell', 'ability']);
-const ROLL_KINDS = new Set(['hit', 'damage', 'check']);
+// healing — бросок лечения заклинанием («Лечение ран»), считается как урон, но подписывается иначе.
+const ROLL_KINDS = new Set(['hit', 'damage', 'check', 'healing']);
 const EVENTS_PAGE_LIMIT = 100;
 const EVENTS_MAX_LIMIT = 200;
 

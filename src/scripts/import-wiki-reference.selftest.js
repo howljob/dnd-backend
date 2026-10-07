@@ -174,6 +174,37 @@ check('раса: размер и скорость', race.data.sizes.join('/') ==
 const background = parsers.parseBackgroundData('## Антрополог [Anthropologist]\n**Источник:** ToA\n\nВас привлекали культуры.\n\nВладение навыками: Проницательность, Религия.\n\nВладение языками: Два на ваш выбор.');
 check('предыстория: навыки и языки', background.data.skills.join('/') === 'Проницательность/Религия' && background.data.languages === 'Два на ваш выбор' && background.data.tools === '');
 
+// --- Бросок заклинания для панели действий стола ---
+const fireballRoll = parsers.parseSpellRoll('Все существа в сфере должны совершить спасбросок Ловкости. Цель получает 8к6 урона огнём при провале или половину этого урона при успехе.\n\nНа больших уровнях. Если вы накладываете это заклинание, используя ячейку 4-го уровня или выше, урон увеличивается на 1к6 за каждый уровень ячейки выше третьего.', 3);
+check('бросок: кость, тип и спасбросок', fireballRoll.kind === 'damage' && fireballRoll.formula === '8d6' && fireballRoll.damageType === 'огонь' && fireballRoll.save === 'dex', JSON.stringify(fireballRoll));
+check('бросок: рост по ячейке', fireballRoll.perSlot?.formula === '1d6' && fireballRoll.perSlot?.step === 1);
+const boltRoll = parsers.parseSpellRoll('Совершите по цели дальнобойную атаку заклинанием. При попадании цель получает урон огнём 1к10. Урон этого заклинания увеличивается на 1к10, когда вы достигаете 5-го уровня (2к10), 11-го уровня (3к10), 17-го уровня (4к10).', 0);
+check('бросок: атака заклинанием и рост заговора', boltRoll.attack === 'ranged' && boltRoll.cantripScaling?.[5] === '2d10' && boltRoll.cantripScaling?.[17] === '4d10', JSON.stringify(boltRoll));
+const cureRoll = parsers.parseSpellRoll('Существо, которого вы касаетесь, восстанавливает количество хитов, равное 1к8 + ваш модификатор базовой характеристики.', 1);
+check('бросок: лечение с модификатором', cureRoll.kind === 'healing' && cureRoll.formula === '1d8' && cureRoll.addsAbilityModifier === true);
+check('бросок: «ё» в разложенной форме распознаётся', parsers.parseSpellRoll('Цель получает 2к6 урона огнём.', 1).damageType === 'огонь');
+check('бросок: без костей — нет данных', parsers.parseSpellRoll('Вы создаёте иллюзию.', 1) === null);
+
+// --- Инвентарь: таблицы оружия и доспехов из markdown ---
+const armsMd = '| Название | Стоимость | Урон | Вес | Свойства |\n| --- | --- | --- | --- | --- |\n| **_Простое рукопашное оружие_** |  |  |  |  |\n| Кинжал | 2 зм | 1к4 колющий | 1 фнт. | Лёгкое, метательное (дис. 20/60), фехтовальное |\n| **_Воинское дальнобойное оружие_** |  |  |  |  |\n| Длинный лук | 50 зм | 1к8 колющий | 2 фнт. | Боеприпас (дис. 150/600), двуручное, тяжёлое |\n| Длинный меч | 15 зм | 1к8 рубящий | 3 фнт. | Универсальное (1к10) |';
+const weapons = parsers.parseWeaponTable(armsMd);
+check('оружие: три строки без заголовков категорий', weapons.length === 3, String(weapons.length));
+check('оружие: кинжал — фехтовальное, метательное, дистанция', weapons[0].damageFormula === '1d4' && weapons[0].damageType === 'колющий' && weapons[0].propertyKeys.includes('finesse') && weapons[0].range === '20/60' && weapons[0].ranged === false);
+check('оружие: лук — дальнобойное воинское', weapons[1].ranged === true && weapons[1].martial === true && weapons[1].propertyKeys.includes('ammunition'));
+check('оружие: универсальная кость', weapons[2].versatileFormula === '1d10');
+const armorMd = '| Доспех | Стоимость | Класс доспеха (КД) | Сила | Скрытность | Вес |\n| --- | --- | --- | --- | --- | --- |\n| **_Средний доспех_** |  |  |  |  |  |\n| Кираса | 400 зм. | 14 + модификатор ЛОВ (макс. 2) | - | - | 20 фнт. |\n| **_Тяжёлый доспех_** |  |  |  |  |  |\n| Кольчуга | 75 зм. | 16 | 13 | Помеха | 55 фнт. |';
+const armorRows = parsers.parseArmorTable(armorMd);
+check('доспехи: КД, ловкость, сила, скрытность', armorRows.length === 2 && armorRows[0].acBase === 14 && armorRows[0].dexMax === 2 && armorRows[1].acBase === 16 && armorRows[1].strength === '13' && armorRows[1].stealthDisadvantage === true && armorRows[1].category === 'Тяжёлый доспех');
+check('инвентарь: вид статьи по слагу', parsers.parseInventoryData('arms', armsMd).kind === 'weapons' && parsers.parseInventoryData('poisons', '').kind === 'article');
+
+// --- HTML статей dnd.su → markdown ---
+const dndsuHtml = require('./dndsu-html');
+const articleMd = dndsuHtml.htmlToMarkdown('<div class="desc"><p>Текст <strong>жирный </strong>и <a href="#x">якорь</a>, <a href="/spells/205-fireball/">огненный шар</a>.</p><br><h3 class="underlined">ВЛАДЕНИЕ ОРУЖИЕМ (XGE)</h3><table><tbody><tr class="table_header"><td>Название</td><td>Урон</td></tr><tr><td colspan="2"><em>Простое</em></td></tr><tr><td>Булава</td><td>1к6 дробящий</td></tr></tbody></table><ul><li><a href="#a">Оглавление</a></li></ul><ul><li>Пункт</li></ul><script>var x=1;</script></div>');
+check('html→md: жирный, ссылки, якоря', articleMd.includes('Текст **жирный** и якорь, [огненный шар](/spells/205-fireball/).'), JSON.stringify(articleMd));
+check('html→md: заголовок капсом приведён к обычному регистру, код книги сохранён', articleMd.includes('### Владение оружием (XGE)'), JSON.stringify(articleMd));
+check('html→md: таблица с объединённой строкой', articleMd.includes('| Название | Урон |\n| --- | --- |\n| _Простое_ |  |\n| Булава | 1к6 дробящий |'), JSON.stringify(articleMd));
+check('html→md: оглавление из якорей выброшено, обычный список остался', !articleMd.includes('Оглавление') && articleMd.includes('- Пункт') && !articleMd.includes('var x'), JSON.stringify(articleMd));
+
 if (failures.length) {
   // eslint-disable-next-line no-console
   failures.forEach((f) => console.error(f));

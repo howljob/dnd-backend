@@ -15,7 +15,9 @@ const SECTION_CONFIG = [
   { section: 'bestiary', table: 'wiki_bestiary', file: 'bestiary-non-homebrew-all.json' },
   { section: 'items', table: 'wiki_items', file: 'items-non-homebrew-all.json' },
   // Состояния: статья dnd.su, докачанная fetch-dnd-su-meta.js в assets/wiki/conditions.
-  { section: 'conditions', table: 'wiki_conditions', file: 'conditions.json' }
+  { section: 'conditions', table: 'wiki_conditions', file: 'conditions.json' },
+  // Инвентарь: статьи раздела dnd.su «Инвентарь», докачанные в assets/wiki/inventory.
+  { section: 'inventory', table: 'wiki_inventory', file: 'articles.json' }
 ];
 
 function slugify(value, fallback) {
@@ -608,6 +610,13 @@ function resolveSectionFilePath(config) {
     }
   }
 
+  if (config.section === 'inventory') {
+    const inventoryPath = path.join(ASSETS_WIKI_DIR, 'inventory', 'articles.json');
+    if (fs.existsSync(inventoryPath)) {
+      return { kind: 'inventory-json', filePath: inventoryPath };
+    }
+  }
+
   const outputPath = path.join(OUTPUT_DIR, config.file);
   if (fs.existsSync(outputPath)) {
     return { kind: 'json-array', filePath: outputPath };
@@ -708,6 +717,39 @@ function normalizeConditionRow(row) {
   };
 }
 
+/**
+ * Статья инвентаря из articles.json: текст уже markdown (заголовки, таблицы,
+ * списки). В data — разобранные таблицы оружия/доспехов для панели действий стола.
+ */
+function normalizeInventoryRow(row) {
+  const slug = slugify(row?.slug, '');
+  const name = sanitizeText(row?.name || '');
+  const content = String(row?.text || '').trim();
+  if (!slug || !name || !content) return null;
+  const data = parsers.parseInventoryData(slug, content);
+  const summary = firstSentence(sanitizeText(
+    content.split(/\n{2,}/).find((p) => p && !/^[#|>\-*]/.test(p.trim())) || content.slice(0, 2000)
+  ));
+  return {
+    slug,
+    name,
+    nameEn: sanitizeText(row?.name_en || ''),
+    source: sanitizeText(row?.source || ''),
+    summary,
+    content,
+    filters: {
+      kind: data.kind,
+      source: sanitizeText(row?.source || '')
+    },
+    payload: {
+      contentFormat: 'markdown',
+      importedFrom: 'inventory-json',
+      link: String(row?.url || ''),
+      data: { ...data, url: String(row?.url || '') }
+    }
+  };
+}
+
 function normalizeFromAssetsIndex(section, item, mdContent) {
   const name = sanitizeText(item?.name || '');
   const nameEn = sanitizeText(item?.nameEn || '');
@@ -800,6 +842,21 @@ async function importSection(client, config, extras) {
     for (const raw of rows) {
       const normalized = normalizeConditionRow(raw);
       if (!normalized || !normalized.content) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await upsertEntry(client, config.table, normalized.slug, normalized);
+      imported += 1;
+    }
+    return imported;
+  }
+
+  if (resolved.kind === 'inventory-json') {
+    const rows = parseJsonFile(resolved.filePath);
+    if (!Array.isArray(rows)) {
+      throw new Error(`Invalid JSON structure in ${resolved.filePath}`);
+    }
+    for (const raw of rows) {
+      const normalized = normalizeInventoryRow(raw);
+      if (!normalized) continue;
       // eslint-disable-next-line no-await-in-loop
       await upsertEntry(client, config.table, normalized.slug, normalized);
       imported += 1;

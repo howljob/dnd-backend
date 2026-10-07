@@ -127,4 +127,31 @@ test('вики: поиск, фильтры, сортировки, данные �
   const flameskull = await get('/api/wiki/reference/bestiary/entities/flameskull');
   assert.equal(flameskull.json.item.name, 'Пылающий череп');
   assert.ok(!/\?/.test(flameskull.json.item.data.conditionImmunities), flameskull.json.item.data.conditionImmunities);
+
+  // Раздел «Инвентарь»: статьи dnd.su; у «Оружия» разобрана таблица для стола.
+  const inventory = await get('/api/wiki/reference/inventory/entities?limit=50');
+  assert.equal(inventory.status, 200);
+  assert.ok(inventory.json.total >= 15, `статей инвентаря: ${inventory.json.total}`);
+  const arms = await get('/api/wiki/reference/inventory/entities/arms');
+  assert.equal(arms.json.item.name, 'Оружие');
+  assert.equal(arms.json.item.entityType, 'inventory');
+  assert.ok(/\| Название \| Стоимость \| Урон \|/.test(arms.json.item.content));
+  const longsword = arms.json.item.data.weapons.find((w) => w.name === 'Длинный меч');
+  assert.ok(longsword, 'в таблице оружия нет длинного меча');
+  assert.equal(longsword.damageFormula, '1d8');
+  assert.equal(longsword.damageType, 'рубящий');
+  assert.equal(longsword.versatileFormula, '1d10');
+  const dagger = arms.json.item.data.weapons.find((w) => w.name === 'Кинжал');
+  assert.ok(dagger.propertyKeys.includes('finesse') && dagger.propertyKeys.includes('thrown'));
+  const armor = await get('/api/wiki/reference/inventory/entities/armor-and-shields');
+  assert.ok(armor.json.item.data.armor.some((a) => a.name === 'Кольчуга' && a.acBase === 16));
+
+  // Бросок заклинания для панели действий: кость, тип, спасбросок, рост по ячейке и у заговоров.
+  assert.equal(detail.json.item.data.roll.formula, '8d6');
+  assert.equal(detail.json.item.data.roll.damageType, 'огонь');
+  assert.equal(detail.json.item.data.roll.save, 'dex');
+  assert.deepEqual(detail.json.item.data.roll.perSlot, { formula: '1d6', step: 1 });
+  const fireBolt = await get(`/api/wiki/reference/spells/entities/${encodeURIComponent('en:fire bolt')}`);
+  assert.equal(fireBolt.json.item.data.roll.attack, 'ranged');
+  assert.equal(fireBolt.json.item.data.roll.cantripScaling['5'], '2d10');
 });
