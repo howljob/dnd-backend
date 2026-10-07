@@ -7,9 +7,28 @@ const profileService = require('../profile/profile.service');
 
 const UPLOADS_VTT_DIR = path.join(process.cwd(), 'uploads', 'vtt');
 const ALLOWED_IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const ALLOWED_AUDIO_MIME = new Set(['audio/mpeg', 'audio/mp3', 'audio/ogg', 'audio/wav', 'audio/x-wav', 'audio/wave']);
 const MAX_MAP_BYTES = 12 * 1024 * 1024;
+const MAX_TOKEN_IMAGE_BYTES = 4 * 1024 * 1024;
+const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
+const UPLOAD_FILE_RE = /^\/uploads\/vtt\/[a-f0-9]{32}\.(png|jpg|webp|gif|mp3|ogg|wav)$/i;
+
+/** Виды файлов библиотеки стола: карта, картинка токена, музыка. */
+const FILE_KINDS = {
+  map: { mimes: ALLOWED_IMAGE_MIME, maxBytes: MAX_MAP_BYTES, badType: 'INVALID_IMAGE_TYPE', badTypeMessage: 'Invalid image type' },
+  image: { mimes: ALLOWED_IMAGE_MIME, maxBytes: MAX_TOKEN_IMAGE_BYTES, badType: 'INVALID_IMAGE_TYPE', badTypeMessage: 'Invalid image type' },
+  audio: { mimes: ALLOWED_AUDIO_MIME, maxBytes: MAX_AUDIO_BYTES, badType: 'INVALID_AUDIO_TYPE', badTypeMessage: 'Invalid audio type' }
+};
+
+// Музыка стола: один трек на сцену, живёт в опубликованном состоянии (слышат все).
+// startedAt ставит сервер — чтобы часы игроков не влияли на синхронизацию;
+// offset — с какой секунды трека пошло воспроизведение (или где поставили паузу).
+const DEFAULT_MUSIC_STATE = {
+  url: null, fileId: null, name: '', playing: false, loop: false, offset: 0, startedAt: null, updatedAt: null
+};
 
 const DEFAULT_SCENE_STATE = {
+  music: DEFAULT_MUSIC_STATE,
   mapUrl: null,
   mapSize: { w: 2400, h: 1600 },
   // feetPerCell — сколько футов в клетке (калибровка сетки по карте), для линейки и шаблонов.
@@ -159,6 +178,46 @@ function sanitizeToken(token) {
   if ('conditions' in out) out.conditions = sanitizeTokenConditions(out.conditions);
   if ('gmNote' in out) out.gmNote = shortText(out.gmNote, 2000);
   if ('label' in out) out.label = shortText(out.label, 80);
+  // Картинка токена — только файл из библиотеки игры (/uploads/vtt/…).
+  if ('imageUrl' in out) {
+    const url = shortText(out.imageUrl, 200);
+    out.imageUrl = url && UPLOAD_FILE_RE.test(url) && !/\.(mp3|ogg|wav)$/i.test(url) ? url : null;
+  }
+  return out;
+}
+
+/**
+ * Музыка сцены (пишет только мастер): файл из библиотеки, играет/пауза, повтор,
+ * позиция. Время старта ставит сервер при каждом включении воспроизведения.
+ */
+function sanitizeMusic(patch, current) {
+  const cur = { ...DEFAULT_MUSIC_STATE, ...(current && typeof current === 'object' ? current : {}) };
+  const src = patch && typeof patch === 'object' ? patch : {};
+  const out = { ...cur };
+  if ('url' in src) {
+    const url = shortText(src.url, 200);
+    out.url = url && UPLOAD_FILE_RE.test(url) && /\.(mp3|ogg|wav)$/i.test(url) ? url : null;
+    if (!out.url) {
+      out.fileId = null;
+      out.name = '';
+      out.playing = false;
+      out.offset = 0;
+    }
+  }
+  if ('fileId' in src) out.fileId = isUuid(src.fileId) ? src.fileId : null;
+  if ('name' in src) out.name = shortText(src.name, 255);
+  if ('loop' in src) out.loop = Boolean(src.loop);
+  if ('offset' in src) out.offset = clampNumberOrNull(Number(src.offset) * 1000, 0, 86400 * 1000) / 1000 || 0;
+  if ('playing' in src) out.playing = Boolean(src.playing) && Boolean(out.url);
+  const now = Date.now();
+  if (out.playing) {
+    // Любое изменение при воспроизведении (включение, перемотка) — новая точка отсчёта.
+    const restarted = !cur.playing || 'offset' in src || ('url' in src && src.url !== cur.url);
+    out.startedAt = restarted || !cur.startedAt ? now : cur.startedAt;
+  } else {
+    out.startedAt = null;
+  }
+  out.updatedAt = now;
   return out;
 }
 
@@ -274,7 +333,9 @@ async function getTabletopBundle(auth, gameId) {
     isGm,
     editorMode: isGm,
     scenes,
-    activeSceneId: active?.id || null
+    activeSceneId: active?.id || null,
+    // Серверные часы — клиент считает сдвиг своих часов и синхронизирует музыку.
+    serverNow: Date.now()
   };
 }
 
@@ -410,6 +471,7 @@ async function patchSceneState(auth, gameId, sceneId, body) {
   const safePatch = { ...patch };
   if (Array.isArray(patch.tokens)) safePatch.tokens = patch.tokens.map((t) => sanitizeToken(t));
   if (patch.measure && typeof patch.measure === 'object') safePatch.measure = sanitizeMeasure(patch.measure, auth.userId);
+  if (patch.music && typeof patch.music === 'object') safePatch.music = sanitizeMusic(patch.music, current.music);
   const mergedState = mergeScenePatch(current, safePatch);
 
   if (effectiveTarget === 'published') {
@@ -503,46 +565,81 @@ function readImageSize(buffer, mime) {
   return { width: null, height: null };
 }
 
-async function saveUploadedMap(auth, gameId, file) {
+/**
+ * Имя загруженного файла: multer отдаёт его как latin1, поэтому русские названия
+ * («тема.mp3») приходят кракозябрами — перекодируем, если это действительно UTF-8.
+ */
+function decodeOriginalName(raw) {
+  const text = String(raw || '');
+  if (!text || /[^\u0000-ÿ]/.test(text)) return text; // уже нормальная строка
+  const decoded = Buffer.from(text, 'latin1').toString('utf8');
+  return decoded.includes('�') ? text : decoded;
+}
+
+/** Расширение файла по MIME — имя на диске случайное, расширение честное. */
+function extensionForMime(mime) {
+  switch (mime) {
+    case 'image/png': return '.png';
+    case 'image/jpeg': return '.jpg';
+    case 'image/webp': return '.webp';
+    case 'image/gif': return '.gif';
+    case 'audio/mpeg':
+    case 'audio/mp3': return '.mp3';
+    case 'audio/ogg': return '.ogg';
+    default: return '.wav';
+  }
+}
+
+/**
+ * Загрузка файла в библиотеку игры (только мастер): карта (map), картинка токена (image)
+ * или музыка (audio). У каждого вида свои типы и предел размера.
+ */
+async function saveUploadedFile(auth, gameId, file, kindRaw) {
+  const kind = String(kindRaw || 'map').toLowerCase();
+  const spec = FILE_KINDS[kind];
+  if (!spec) {
+    throw createHttpError(400, 'Unknown file kind');
+  }
   const { isGm } = await getMyMembership(auth, gameId);
   if (!isGm) {
-    throw createHttpError(403, 'Only GM can upload maps');
+    throw createHttpError(403, 'Only GM can upload files');
   }
   if (!file || !file.buffer) {
     throw createHttpError(400, 'File required');
   }
-  if (file.size > MAX_MAP_BYTES) {
+  if (file.size > spec.maxBytes) {
     const error = createHttpError(400, 'File too large');
     error.code = 'FILE_TOO_LARGE';
     throw error;
   }
   const mime = String(file.mimetype || '').toLowerCase();
-  if (!ALLOWED_IMAGE_MIME.has(mime)) {
-    const error = createHttpError(400, 'Invalid image type');
-    error.code = 'INVALID_IMAGE_TYPE';
+  if (!spec.mimes.has(mime)) {
+    const error = createHttpError(400, spec.badTypeMessage);
+    error.code = spec.badType;
     throw error;
   }
 
   await fs.mkdir(UPLOADS_VTT_DIR, { recursive: true });
-  const ext = mime === 'image/png' ? '.png'
-    : mime === 'image/jpeg' ? '.jpg'
-      : mime === 'image/webp' ? '.webp' : '.gif';
-  const name = `${crypto.randomBytes(16).toString('hex')}${ext}`;
+  const name = `${crypto.randomBytes(16).toString('hex')}${extensionForMime(mime)}`;
   const full = path.join(UPLOADS_VTT_DIR, name);
   await fs.writeFile(full, file.buffer);
 
   const url = `/uploads/vtt/${name}`;
-  const { width, height } = readImageSize(file.buffer, mime);
-  // Запись в библиотеку игры: файл можно будет поставить картой снова или удалить.
-  const originalName = String(file.originalname || '').slice(0, 255);
+  const { width, height } = kind === 'audio' ? { width: null, height: null } : readImageSize(file.buffer, mime);
+  // Запись в библиотеку игры: файл можно будет поставить снова или удалить.
+  const originalName = decodeOriginalName(file.originalname).slice(0, 255);
   const inserted = await pool.query(
     `INSERT INTO tabletop_files (game_id, uploaded_by, kind, url, original_name, mime, size_bytes, width, height)
-     VALUES ($1, $2, 'map', $3, $4, $5, $6, $7, $8)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING id, created_at`,
-    [gameId, auth.userId, url, originalName, mime, file.size, width, height]
+    [gameId, auth.userId, kind, url, originalName, mime, file.size, width, height]
   );
 
-  return { url, mime, size: file.size, width, height, fileId: inserted.rows[0].id, name: originalName };
+  return { url, kind, mime, size: file.size, width, height, fileId: inserted.rows[0].id, name: originalName };
+}
+
+async function saveUploadedMap(auth, gameId, file) {
+  return saveUploadedFile(auth, gameId, file, 'map');
 }
 
 function mapFileRow(row) {
@@ -575,7 +672,31 @@ async function listGameFiles(auth, gameId) {
   return result.rows.map(mapFileRow);
 }
 
-/** Удалить файл из библиотеки и с диска; из сцен, где он стоит картой, ссылка убирается. */
+/** Убирает ссылки на удалённый файл из состояния сцены: карта, картинки токенов, музыка. */
+function stripFileFromState(stateRaw, url) {
+  const state = normalizeSceneState(stateRaw);
+  let changed = false;
+  if (state.mapUrl === url) {
+    state.mapUrl = null;
+    changed = true;
+  }
+  if (Array.isArray(state.tokens)) {
+    state.tokens = state.tokens.map((t) => {
+      if (t && t.imageUrl === url) {
+        changed = true;
+        return { ...t, imageUrl: null };
+      }
+      return t;
+    });
+  }
+  if (state.music && state.music.url === url) {
+    state.music = { ...DEFAULT_MUSIC_STATE, updatedAt: Date.now() };
+    changed = true;
+  }
+  return { state, changed };
+}
+
+/** Удалить файл из библиотеки и с диска; из сцен, где он стоит картой/картинкой токена/музыкой, ссылка убирается. */
 async function deleteGameFile(auth, gameId, fileId) {
   const { isGm } = await getMyMembership(auth, gameId);
   if (!isGm) {
@@ -593,16 +714,25 @@ async function deleteGameFile(auth, gameId, fileId) {
     throw createHttpError(404, 'File not found');
   }
   await pool.query('DELETE FROM tabletop_files WHERE id = $1', [fileId]);
-  await pool.query(
-    `UPDATE tabletop_scenes
-     SET draft_state = CASE WHEN draft_state->>'mapUrl' = $2 THEN draft_state || '{"mapUrl": null}'::jsonb ELSE draft_state END,
-         published_state = CASE WHEN published_state->>'mapUrl' = $2 THEN published_state || '{"mapUrl": null}'::jsonb ELSE published_state END,
-         updated_at = now()
-     WHERE game_id = $1 AND (draft_state->>'mapUrl' = $2 OR published_state->>'mapUrl' = $2)`,
-    [gameId, row.url]
+  // Сцены, где файл упоминается (карта, картинка токена, музыка): ссылка убирается.
+  const scenes = await pool.query(
+    `SELECT id, draft_state, published_state
+     FROM tabletop_scenes
+     WHERE game_id = $1 AND (draft_state::text LIKE $2 OR published_state::text LIKE $2)`,
+    [gameId, `%${row.url}%`]
   );
+  for (const scene of scenes.rows) {
+    const draft = stripFileFromState(scene.draft_state, row.url);
+    const published = stripFileFromState(scene.published_state, row.url);
+    if (!draft.changed && !published.changed) continue;
+    // eslint-disable-next-line no-await-in-loop
+    await pool.query(
+      `UPDATE tabletop_scenes SET draft_state = $2::jsonb, published_state = $3::jsonb, updated_at = now() WHERE id = $1`,
+      [scene.id, JSON.stringify(draft.state), JSON.stringify(published.state)]
+    );
+  }
   const fileName = path.basename(String(row.url));
-  if (/^[a-f0-9]{32}\.(png|jpg|webp|gif)$/i.test(fileName)) {
+  if (/^[a-f0-9]{32}\.(png|jpg|webp|gif|mp3|ogg|wav)$/i.test(fileName)) {
     await fs.unlink(path.join(UPLOADS_VTT_DIR, fileName)).catch(() => {});
   }
   return { ok: true };
@@ -1030,6 +1160,9 @@ module.exports = {
   patchSceneState,
   publishScene,
   saveUploadedMap,
+  saveUploadedFile,
+  sanitizeMusic,
+  DEFAULT_MUSIC_STATE,
   listGameFiles,
   deleteGameFile,
   readImageSize,

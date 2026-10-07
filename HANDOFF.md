@@ -1,5 +1,14 @@
 # DND Backend Handoff
 
+## 2026-10-07 — Музыка стола и библиотека с видами файлов (ветка fix/tabletop-music)
+
+- **Загрузка в библиотеку** — `POST /api/tabletop/games/:id/files` (multipart: `file` + `kind` = `map` | `image` | `audio`), только мастер. Пределы по виду: карта 12 МБ (png/jpeg/webp/gif), картинка токена 4 МБ, музыка 20 МБ (`audio/mpeg|mp3|ogg|wav`); коды ошибок `FILE_TOO_LARGE`, `INVALID_IMAGE_TYPE`, `INVALID_AUDIO_TYPE`. Старый `map-upload` остаётся обёрткой над `saveUploadedFile(…, 'map')`. Имя файла перекодируется из latin1 (multer) — русские названия больше не кракозябры. На проде nginx `client_max_body_size` нужно поднять до 25m.
+- **Музыка в сцене** — `published_state.music` { url, fileId, name, playing, loop, offset (сек), startedAt, updatedAt }: пишет только мастер (`patchScene`, target published), `sanitizeMusic` проверяет url (`/uploads/vtt/*.mp3|ogg|wav`), а `startedAt` ставит сервер при каждом включении/перемотке; `offset` — позиция старта или паузы. В сборке стола появилось `serverNow` — клиент считает сдвиг часов и держит позицию.
+- **Картинка токена** — `token.imageUrl` (только `/uploads/vtt/*` картинка, `sanitizeToken`). Удаление файла (`DELETE …/files/:id`) снимает его отовсюду: карта сцены, картинки токенов, музыка (`stripFileFromState`).
+- Тест: `test/tabletop-files.test.js`. `npm test` — 17/17.
+
+---
+
 ## 2026-10-07 — Броски из оружия и заклинаний, раздел вики «Инвентарь» (ветка fix/tabletop-rolls)
 
 - **Раздел вики «Инвентарь»** — таблица `wiki_inventory` (миграция `1791380390899_wiki-inventory`), секция `inventory` в `wiki-reference.service.js` (entityType `inventory`, фильтров нет). Записи — 17 статей dnd.su из `/articles/inventory/` (оружие, доспехи и щиты, снаряжение, инструменты, яды, безделушки, артефакты, сокровищница…); сводная статья «Доспехи, Оружие, Снаряжение и Инструменты» пропущена как дубль. Источник — `assets/wiki/inventory/articles.json` фронта, его докачивает `fetch-dnd-su-meta.js inventory` (`--force` — перекачать всё); HTML статьи переводится в markdown своим разборщиком `src/scripts/dndsu-html.js` (заголовки, абзацы, списки, GFM-таблицы с объединёнными строками-категориями, вложенные карточки монстров, внутренние ссылки dnd.su). Импортёр: `normalizeInventoryRow`, в `payload.data` для «Оружия» — `weapons[]` (`damageFormula` «1d8», `damageType`, `propertyKeys` finesse/versatile/thrown/ammunition/…, `versatileFormula`, `range`, `ranged`, `martial`), для «Доспехов и щитов» — `armor[]` (`acBase`, `addsDex`, `dexMax`, `strength`, `stealthDisadvantage`). Парсеры — `wiki-parsers.js` (`parseWeaponTable`, `parseArmorTable`, `parseInventoryData`) работают по markdown, покрыты `wiki:selftest`.

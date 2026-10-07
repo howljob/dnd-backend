@@ -131,6 +131,30 @@ async function listGameEvents(req, res) {
   }
 }
 
+/** Загрузка в библиотеку игры: карта, картинка токена или музыка (вид — поле kind). */
+async function uploadFile(req, res) {
+  try {
+    const file = req.file;
+    const kind = (req.body && req.body.kind) || req.query.kind || 'map';
+    const result = await tabletopService.saveUploadedFile(
+      req.auth,
+      req.params.gameId,
+      file
+        ? {
+          buffer: file.buffer,
+          mimetype: file.mimetype,
+          size: file.size,
+          originalname: file.originalname
+        }
+        : null,
+      kind
+    );
+    return res.status(201).json({ ok: true, ...result });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
 async function listGameFiles(req, res) {
   try {
     const items = await tabletopService.listGameFiles(req.auth, req.params.gameId);
@@ -214,6 +238,7 @@ module.exports = {
   setActiveScene,
   uploadMap,
   listGameEvents,
+  uploadFile,
   listGameFiles,
   deleteGameFile,
   getGameCharacterSheet,
