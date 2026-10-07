@@ -212,6 +212,12 @@ function attachTabletopWs(httpServer) {
           return;
         }
 
+        if (msg.type === 'chat' && client.gameId) {
+          const event = await tabletopService.createChatEvent(auth, client.gameId, { text: msg.text });
+          broadcastEvent(client.gameId, event);
+          return;
+        }
+
         if (msg.type === 'patchScene' && client.gameId && isUuid(msg.sceneId)) {
           const body = {
             target: msg.target === 'published' ? 'published' : 'draft',

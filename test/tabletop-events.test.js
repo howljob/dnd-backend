@@ -234,6 +234,22 @@ test('лог событий стола: рассылка, приватность
     assert.equal(actionMsg.item.payload.rolls.length, 1);
     assert.ok(actionMsg.item.payload.rolls[0].total >= 8 && actionMsg.item.payload.rolls[0].total <= 48);
 
+    // 3б. Сообщение чата: приходит всем с именем автора, переводы строк сохраняются,
+    // пустое отклоняется, длинное обрезается до 1000 знаков.
+    playerWs.ws.send(JSON.stringify({ type: 'chat', text: '  Привет, мастер!\r\nИдём в подземелье?  ' }));
+    const chatMsg = await masterWs.waitFor((m) => m.type === 'event' && m.item?.type === 'chat');
+    assert.equal(chatMsg.item.payload.text, 'Привет, мастер!\nИдём в подземелье?');
+    assert.equal(chatMsg.item.actorUserId, player.user.id);
+    assert.ok(chatMsg.item.actorName, 'у сообщения чата нет имени автора');
+    assert.equal(chatMsg.item.isPrivate, false);
+    await playerWs.waitFor((m) => m.type === 'event' && m.item?.type === 'chat');
+    masterWs.ws.send(JSON.stringify({ type: 'chat', text: '   ' }));
+    const emptyChat = await masterWs.waitFor((m) => m.type === 'error' && m.code === 400);
+    assert.ok(emptyChat);
+    masterWs.ws.send(JSON.stringify({ type: 'chat', text: 'я'.repeat(1500) }));
+    const longChat = await playerWs.waitFor((m) => m.type === 'event' && m.item?.type === 'chat' && m.item.actorUserId === master.user.id);
+    assert.equal(longChat.item.payload.text.length, 1000);
+
     // 4. Мусорная формула отклоняется.
     playerWs.ws.send(JSON.stringify({ type: 'rollDice', formula: 'DROP TABLE users' }));
     const badFormula = await playerWs.waitFor(
