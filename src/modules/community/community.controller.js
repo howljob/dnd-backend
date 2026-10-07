@@ -179,6 +179,30 @@ async function createPostComment(req, res) {
   }
 }
 
+async function deletePostComment(req, res) {
+  try {
+    const items = await communityService.deletePostComment(req.auth, req.params.id, req.params.commentId);
+    return res.status(200).json({
+      ok: true,
+      items
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+async function getPost(req, res) {
+  try {
+    const post = await communityService.getPost(req.auth || null, req.params.id);
+    return res.status(200).json({
+      ok: true,
+      post
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
 async function followUser(req, res) {
   try {
     await communityService.followUser(req.auth, req.params.userId);
@@ -258,6 +282,8 @@ module.exports = {
   removePostReaction,
   listPostComments,
   createPostComment,
+  deletePostComment,
+  getPost,
   followUser,
   unfollowUser,
   listFollowers,

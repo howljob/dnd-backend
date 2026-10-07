@@ -559,7 +559,7 @@ async function getUserSummary(auth, userId) {
 
   const viewerUserId = isUuid(auth?.userId) ? auth.userId : null;
   const userResult = await pool.query(
-    'SELECT id, display_name, avatar_url FROM users WHERE id = $1 LIMIT 1',
+    'SELECT id, display_name, avatar_url, bio, role, created_at FROM users WHERE id = $1 LIMIT 1',
     [userId]
   );
   const user = userResult.rows[0];
@@ -567,7 +567,7 @@ async function getUserSummary(auth, userId) {
     throw createHttpError(404, 'User not found');
   }
 
-  const [followersResult, followingResult, postsResult, relationResult] = await Promise.all([
+  const [followersResult, followingResult, postsResult, relationResult, gamesResult] = await Promise.all([
     pool.query(
       'SELECT COUNT(*)::int AS count FROM community_follows WHERE followee_user_id = $1',
       [userId]
@@ -589,19 +589,44 @@ async function getUserSummary(auth, userId) {
          LIMIT 1`,
         [viewerUserId, userId]
       )
-      : Promise.resolve({ rows: [] })
+      : Promise.resolve({ rows: [] }),
+    // Публичный профиль: игры, в которых человек состоит (ведёт или играет), кроме архивных.
+    pool.query(
+      `SELECT g.id, g.title, g.starts_at, gm.member_role, gs.slug AS status_slug, gt.name AS game_type_name
+       FROM game_memberships gm
+       INNER JOIN games g ON g.id = gm.game_id
+       INNER JOIN game_statuses gs ON gs.id = g.status_id
+       INNER JOIN game_types gt ON gt.id = g.game_type_id
+       WHERE gm.user_id = $1
+         AND gm.status = 'approved'
+         AND gs.slug <> 'cancelled'
+       ORDER BY (gm.member_role = 'gm') DESC, g.starts_at DESC NULLS LAST, g.created_at DESC
+       LIMIT 50`,
+      [userId]
+    )
   ]);
 
   return {
     user: {
       id: user.id,
       displayName: user.display_name,
-      avatar: user.avatar_url || null
+      avatar: user.avatar_url || null,
+      bio: user.bio || '',
+      role: user.role || 'player',
+      joinedAt: user.created_at ? toIso(user.created_at) : null
     },
     followersCount: Number(followersResult.rows[0]?.count || 0),
     followingCount: Number(followingResult.rows[0]?.count || 0),
     postsCount: Number(postsResult.rows[0]?.count || 0),
-    viewerIsFollowing: relationResult.rows.length > 0
+    viewerIsFollowing: relationResult.rows.length > 0,
+    games: gamesResult.rows.map((row) => ({
+      id: row.id,
+      title: row.title,
+      role: row.member_role === 'gm' ? 'gm' : 'player',
+      status: row.status_slug || 'active',
+      system: row.game_type_name || '',
+      startsAt: row.starts_at ? toIso(row.starts_at) : null
+    }))
   };
 }
 
@@ -905,6 +930,60 @@ async function createPostComment(auth, postId, data) {
   return listPostComments(postId);
 }
 
+// Удалить комментарий может его автор, автор записи, модератор или админ. Удаление мягкое (deleted_at).
+async function deletePostComment(auth, postId, commentId) {
+  requireAuthUser(auth);
+
+  if (!isUuid(postId) || !isUuid(commentId)) {
+    throw createHttpError(400, 'Invalid comment id');
+  }
+
+  const postRecord = await getPostRecordById(postId);
+  if (!postRecord || postRecord.deleted_at) {
+    throw createHttpError(404, 'Post not found');
+  }
+
+  const commentResult = await pool.query(
+    `SELECT id, author_user_id, deleted_at
+     FROM community_post_comments
+     WHERE id = $1 AND post_id = $2
+     LIMIT 1`,
+    [commentId, postId]
+  );
+  const comment = commentResult.rows[0];
+  if (!comment || comment.deleted_at) {
+    throw createHttpError(404, 'Comment not found');
+  }
+
+  const isStaff = auth.role === 'admin' || auth.role === 'moderator';
+  const isCommentAuthor = auth.userId === comment.author_user_id;
+  const isPostAuthor = auth.userId === postRecord.author_user_id;
+  if (!isStaff && !isCommentAuthor && !isPostAuthor) {
+    throw createHttpError(403, 'Forbidden');
+  }
+
+  await pool.query(
+    `UPDATE community_post_comments
+     SET deleted_at = now(), updated_at = now()
+     WHERE id = $1`,
+    [commentId]
+  );
+
+  return listPostComments(postId);
+}
+
+async function getPost(auth, postId) {
+  if (!isUuid(postId)) {
+    throw createHttpError(400, 'Invalid post id');
+  }
+  const viewerUserId = isUuid(auth?.userId) ? auth.userId : null;
+  const post = await getPostById(postId, viewerUserId);
+  if (!post) {
+    throw createHttpError(404, 'Post not found');
+  }
+  return post;
+}
+
 async function followUser(auth, followeeUserId) {
   requireAuthUser(auth);
 
@@ -1094,6 +1173,8 @@ module.exports = {
   removePostReaction,
   listPostComments,
   createPostComment,
+  deletePostComment,
+  getPost,
   followUser,
   unfollowUser,
   listFollowers,

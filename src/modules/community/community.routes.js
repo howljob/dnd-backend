@@ -10,12 +10,14 @@ communityRouter.get('/me/notifications', requireAuth, communityController.listMy
 communityRouter.patch('/me/notifications/read', requireAuth, communityController.markNotificationsRead);
 communityRouter.get('/users/:userId/summary', optionalAuth, communityController.getUserSummary);
 communityRouter.post('/posts', requireAuth, communityController.createPost);
+communityRouter.get('/posts/:id', optionalAuth, communityController.getPost);
 communityRouter.patch('/posts/:id', requireAuth, communityController.updatePost);
 communityRouter.delete('/posts/:id', requireAuth, communityController.deletePost);
 communityRouter.post('/posts/:id/reactions', requireAuth, communityController.addPostReaction);
 communityRouter.delete('/posts/:id/reactions', requireAuth, communityController.removePostReaction);
 communityRouter.get('/posts/:id/comments', communityController.listPostComments);
 communityRouter.post('/posts/:id/comments', requireAuth, communityController.createPostComment);
+communityRouter.delete('/posts/:id/comments/:commentId', requireAuth, communityController.deletePostComment);
 communityRouter.post('/follow/:userId', requireAuth, communityController.followUser);
 communityRouter.delete('/follow/:userId', requireAuth, communityController.unfollowUser);
 communityRouter.get('/users/:userId/followers', communityController.listFollowers);
