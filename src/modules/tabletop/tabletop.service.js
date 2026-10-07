@@ -102,12 +102,67 @@ function normalizeSceneState(raw) {
   return deepMerge({ ...DEFAULT_SCENE_STATE }, raw && typeof raw === 'object' ? raw : {});
 }
 
-function filterPublishedStateForPlayer(state) {
+const TOKEN_MAX_CONDITIONS = 12;
+const TOKEN_HP_FIELDS = ['hpCurrent', 'hpMax', 'tempHp'];
+
+function clampNumberOrNull(value, min, max) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+function shortText(value, max) {
+  return typeof value === 'string' ? value.trim().slice(0, max) : '';
+}
+
+/** Состояния токена: значок + подпись (стандартное состояние из вики или своё). */
+function sanitizeTokenConditions(list) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((c) => c && typeof c === 'object')
+    .slice(0, TOKEN_MAX_CONDITIONS)
+    .map((c) => ({
+      id: shortText(c.id, 40) || `c-${Math.random().toString(36).slice(2, 10)}`,
+      slug: shortText(c.slug, 40) || null,
+      icon: shortText(c.icon, 8) || '●',
+      label: shortText(c.label, 40)
+    }));
+}
+
+/** Поля токена, которые приходят с клиента, приводим к безопасным значениям. */
+function sanitizeToken(token) {
+  if (!token || typeof token !== 'object') return token;
+  const out = { ...token };
+  for (const key of TOKEN_HP_FIELDS) {
+    if (key in out) out[key] = clampNumberOrNull(out[key], 0, 9999);
+  }
+  if ('conditions' in out) out.conditions = sanitizeTokenConditions(out.conditions);
+  if ('gmNote' in out) out.gmNote = shortText(out.gmNote, 2000);
+  if ('label' in out) out.label = shortText(out.label, 80);
+  return out;
+}
+
+/**
+ * Что из опубликованной сцены видит игрок: без скрытых объектов и заметок мастера;
+ * хиты — только у своих токенов (мастер видит хиты всех).
+ */
+function filterPublishedStateForPlayer(state, viewerUserId = null) {
   const normalized = normalizeSceneState(state);
   const out = JSON.parse(JSON.stringify(normalized));
   delete out.gmNotes;
   if (Array.isArray(out.tokens)) {
-    out.tokens = out.tokens.filter((t) => !t.hidden && t.visibility !== 'gm');
+    out.tokens = out.tokens
+      .filter((t) => !t.hidden && t.visibility !== 'gm')
+      .map((t) => {
+        const copy = { ...t };
+        delete copy.gmNote;
+        const isOwner = viewerUserId && copy.ownerUserId && String(copy.ownerUserId) === String(viewerUserId);
+        if (!isOwner) {
+          for (const key of TOKEN_HP_FIELDS) delete copy[key];
+        }
+        return copy;
+      });
   }
   if (Array.isArray(out.templates)) {
     out.templates = out.templates.filter((t) => !t.hidden && t.visibility !== 'gm');
@@ -144,7 +199,7 @@ async function assertGameExists(gameId) {
   }
 }
 
-function mapSceneRow(row, { forPlayer, isGm }) {
+function mapSceneRow(row, { forPlayer, isGm, viewerUserId = null }) {
   const draft = normalizeSceneState(row.draft_state);
   const published = normalizeSceneState(row.published_state);
 
@@ -156,7 +211,7 @@ function mapSceneRow(row, { forPlayer, isGm }) {
     isActive: row.is_active,
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
     draftState: isGm ? draft : undefined,
-    publishedState: forPlayer ? filterPublishedStateForPlayer(published) : published,
+    publishedState: forPlayer ? filterPublishedStateForPlayer(published, viewerUserId) : published,
     publishedStateGmView: isGm ? published : undefined
   };
 }
@@ -191,7 +246,7 @@ async function getTabletopBundle(auth, gameId) {
     [gameId]
   );
 
-  const scenes = scenesResult.rows.map((row) => mapSceneRow(row, { forPlayer: !isGm, isGm }));
+  const scenes = scenesResult.rows.map((row) => mapSceneRow(row, { forPlayer: !isGm, isGm, viewerUserId: auth.userId }));
 
   const active = scenes.find((s) => s.isActive) || scenes[0] || null;
 
@@ -293,19 +348,25 @@ async function patchSceneState(auth, gameId, sceneId, body) {
     }
     const cur = normalizeSceneState(scene.published_state);
     const tokenUpdates = Array.isArray(patch.tokens) ? patch.tokens : null;
-    const otherKeys = Object.keys(patch).filter((k) => k !== 'tokens');
+    const otherKeys = Object.keys(patch).filter((k) => k !== 'tokens' && k !== 'tokensMode');
     if (!tokenUpdates || otherKeys.length > 0) {
-      throw createHttpError(403, 'Players may only update own token positions');
+      throw createHttpError(403, 'Players may only update their own tokens');
     }
     const byId = new Map((cur.tokens || []).map((t) => [t.id, { ...t }]));
-    for (const t of tokenUpdates) {
-      if (!t || !t.id) continue;
-      const ex = byId.get(t.id);
-      if (ex && ex.ownerUserId === auth.userId) {
-        if (typeof t.x === 'number') ex.x = t.x;
-        if (typeof t.y === 'number') ex.y = t.y;
-        if (typeof t.size === 'number') ex.size = t.size;
+    for (const raw of tokenUpdates) {
+      if (!raw || !raw.id) continue;
+      const ex = byId.get(raw.id);
+      if (!ex || ex.ownerUserId !== auth.userId) continue;
+      // Владелец токена: положение, размер, хиты и состояния. Заметки мастера,
+      // владелец, скрытость и подпись — только мастер.
+      const t = sanitizeToken(raw);
+      if (typeof t.x === 'number') ex.x = t.x;
+      if (typeof t.y === 'number') ex.y = t.y;
+      if (typeof t.size === 'number') ex.size = t.size;
+      for (const key of TOKEN_HP_FIELDS) {
+        if (key in t) ex[key] = t[key];
       }
+      if ('conditions' in t) ex.conditions = t.conditions;
     }
     const merged = normalizeSceneState({ ...cur, tokens: Array.from(byId.values()) });
     const result = await pool.query(
@@ -322,7 +383,10 @@ async function patchSceneState(auth, gameId, sceneId, body) {
   const current = normalizeSceneState(
     effectiveTarget === 'published' ? scene.published_state : scene.draft_state
   );
-  const mergedState = mergeScenePatch(current, patch);
+  const safePatch = Array.isArray(patch.tokens)
+    ? { ...patch, tokens: patch.tokens.map((t) => sanitizeToken(t)) }
+    : patch;
+  const mergedState = mergeScenePatch(current, safePatch);
 
   if (effectiveTarget === 'published') {
     const result = await pool.query(
@@ -817,6 +881,7 @@ module.exports = {
   DEFAULT_SCENE_STATE,
   deepMerge,
   mergeScenePatch,
+  sanitizeToken,
   normalizeSceneState,
   getGameCharacterSheet,
   filterPublishedStateForPlayer,
