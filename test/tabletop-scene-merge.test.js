@@ -5,7 +5,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { mergeScenePatch, filterPublishedStateForPlayer, sanitizeToken } = require('../src/modules/tabletop/tabletop.service');
+const { mergeScenePatch, filterPublishedStateForPlayer, sanitizeToken, readImageSize } = require('../src/modules/tabletop/tabletop.service');
+
+test('размер картинки читается из заголовка PNG', () => {
+  const png = Buffer.alloc(33, 0);
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png, 0);
+  png.writeUInt32BE(13, 8);
+  png.write('IHDR', 12, 'ascii');
+  png.writeUInt32BE(1920, 16);
+  png.writeUInt32BE(1080, 20);
+  assert.deepEqual(readImageSize(png, 'image/png'), { width: 1920, height: 1080 });
+  assert.deepEqual(readImageSize(Buffer.alloc(4), 'image/jpeg'), { width: null, height: null });
+});
 
 const base = () => ({
   tokens: [

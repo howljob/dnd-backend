@@ -12,13 +12,15 @@ const MAX_MAP_BYTES = 12 * 1024 * 1024;
 const DEFAULT_SCENE_STATE = {
   mapUrl: null,
   mapSize: { w: 2400, h: 1600 },
-  grid: { enabled: false, cellPx: 70, offsetX: 0, offsetY: 0 },
+  // feetPerCell — сколько футов в клетке (калибровка сетки по карте), для линейки и шаблонов.
+  grid: { enabled: false, cellPx: 70, offsetX: 0, offsetY: 0, feetPerCell: 5 },
   tokens: [],
   templates: [],
   measure: { active: false, points: [] },
   initiative: { active: false, round: 1, turnIndex: 0, entries: [] },
   gmNotes: [],
-  fog: { revealed: [] }
+  // Туман: enabled — весь лист скрыт, ops — по порядку «открыть/скрыть» круг или прямоугольник.
+  fog: { enabled: false, ops: [], revealed: [] }
 };
 
 function createHttpError(statusCode, message) {
@@ -128,6 +130,23 @@ function sanitizeTokenConditions(list) {
       icon: shortText(c.icon, 8) || '●',
       label: shortText(c.label, 40)
     }));
+}
+
+/** Линейка: до 8 точек с числовыми координатами, кто мерит, когда. */
+function sanitizeMeasure(measure, userId) {
+  const points = Array.isArray(measure?.points)
+    ? measure.points
+      .filter((p) => p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)))
+      .slice(0, 8)
+      .map((p) => ({ x: Math.round(Number(p.x)), y: Math.round(Number(p.y)) }))
+    : [];
+  return {
+    active: points.length >= 2,
+    points,
+    userId: userId || null,
+    label: shortText(measure?.label, 60),
+    at: Date.now()
+  };
 }
 
 /** Поля токена, которые приходят с клиента, приводим к безопасным значениям. */
@@ -348,12 +367,17 @@ async function patchSceneState(auth, gameId, sceneId, body) {
     }
     const cur = normalizeSceneState(scene.published_state);
     const tokenUpdates = Array.isArray(patch.tokens) ? patch.tokens : null;
-    const otherKeys = Object.keys(patch).filter((k) => k !== 'tokens' && k !== 'tokensMode');
-    if (!tokenUpdates || otherKeys.length > 0) {
-      throw createHttpError(403, 'Players may only update their own tokens');
+    const measurePatch = patch.measure && typeof patch.measure === 'object' ? patch.measure : null;
+    const otherKeys = Object.keys(patch).filter((k) => k !== 'tokens' && k !== 'tokensMode' && k !== 'measure');
+    if ((!tokenUpdates && !measurePatch) || otherKeys.length > 0) {
+      throw createHttpError(403, 'Players may only update their own tokens and the ruler');
+    }
+    // Линейка видна всем: игрок может показать своё измерение (две точки, подпись).
+    if (measurePatch) {
+      cur.measure = sanitizeMeasure(measurePatch, auth.userId);
     }
     const byId = new Map((cur.tokens || []).map((t) => [t.id, { ...t }]));
-    for (const raw of tokenUpdates) {
+    for (const raw of tokenUpdates || []) {
       if (!raw || !raw.id) continue;
       const ex = byId.get(raw.id);
       if (!ex || ex.ownerUserId !== auth.userId) continue;
@@ -383,9 +407,9 @@ async function patchSceneState(auth, gameId, sceneId, body) {
   const current = normalizeSceneState(
     effectiveTarget === 'published' ? scene.published_state : scene.draft_state
   );
-  const safePatch = Array.isArray(patch.tokens)
-    ? { ...patch, tokens: patch.tokens.map((t) => sanitizeToken(t)) }
-    : patch;
+  const safePatch = { ...patch };
+  if (Array.isArray(patch.tokens)) safePatch.tokens = patch.tokens.map((t) => sanitizeToken(t));
+  if (patch.measure && typeof patch.measure === 'object') safePatch.measure = sanitizeMeasure(patch.measure, auth.userId);
   const mergedState = mergeScenePatch(current, safePatch);
 
   if (effectiveTarget === 'published') {
@@ -439,6 +463,46 @@ async function publishScene(auth, gameId, sceneId) {
   return mapSceneRow(result.rows[0], { forPlayer: false, isGm: true });
 }
 
+/** Размер PNG/JPEG/GIF/WebP по заголовку файла — чтобы карта сразу вставала в свой размер. */
+function readImageSize(buffer, mime) {
+  try {
+    if (mime === 'image/png' && buffer.length >= 24 && buffer.toString('ascii', 1, 4) === 'PNG') {
+      return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+    }
+    if (mime === 'image/gif' && buffer.length >= 10) {
+      return { width: buffer.readUInt16LE(6), height: buffer.readUInt16LE(8) };
+    }
+    if (mime === 'image/jpeg') {
+      let offset = 2;
+      while (offset + 9 < buffer.length) {
+        if (buffer[offset] !== 0xff) { offset += 1; continue; }
+        const marker = buffer[offset + 1];
+        const length = buffer.readUInt16BE(offset + 2);
+        if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+          return { height: buffer.readUInt16BE(offset + 5), width: buffer.readUInt16BE(offset + 7) };
+        }
+        offset += 2 + length;
+      }
+    }
+    if (mime === 'image/webp' && buffer.length >= 30 && buffer.toString('ascii', 0, 4) === 'RIFF') {
+      const chunk = buffer.toString('ascii', 12, 16);
+      if (chunk === 'VP8X') {
+        return { width: 1 + buffer.readUIntLE(24, 3), height: 1 + buffer.readUIntLE(27, 3) };
+      }
+      if (chunk === 'VP8 ') {
+        return { width: buffer.readUInt16LE(26) & 0x3fff, height: buffer.readUInt16LE(28) & 0x3fff };
+      }
+      if (chunk === 'VP8L') {
+        const b0 = buffer[21]; const b1 = buffer[22]; const b2 = buffer[23]; const b3 = buffer[24];
+        return { width: 1 + (((b1 & 0x3f) << 8) | b0), height: 1 + (((b3 & 0x0f) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6)) };
+      }
+    }
+  } catch (e) {
+    /* размер не критичен */
+  }
+  return { width: null, height: null };
+}
+
 async function saveUploadedMap(auth, gameId, file) {
   const { isGm } = await getMyMembership(auth, gameId);
   if (!isGm) {
@@ -467,7 +531,81 @@ async function saveUploadedMap(auth, gameId, file) {
   const full = path.join(UPLOADS_VTT_DIR, name);
   await fs.writeFile(full, file.buffer);
 
-  return { url: `/uploads/vtt/${name}`, mime, size: file.size };
+  const url = `/uploads/vtt/${name}`;
+  const { width, height } = readImageSize(file.buffer, mime);
+  // Запись в библиотеку игры: файл можно будет поставить картой снова или удалить.
+  const originalName = String(file.originalname || '').slice(0, 255);
+  const inserted = await pool.query(
+    `INSERT INTO tabletop_files (game_id, uploaded_by, kind, url, original_name, mime, size_bytes, width, height)
+     VALUES ($1, $2, 'map', $3, $4, $5, $6, $7, $8)
+     RETURNING id, created_at`,
+    [gameId, auth.userId, url, originalName, mime, file.size, width, height]
+  );
+
+  return { url, mime, size: file.size, width, height, fileId: inserted.rows[0].id, name: originalName };
+}
+
+function mapFileRow(row) {
+  return {
+    id: row.id,
+    kind: row.kind,
+    url: row.url,
+    name: row.original_name || '',
+    mime: row.mime,
+    size: Number(row.size_bytes) || 0,
+    width: row.width,
+    height: row.height,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at
+  };
+}
+
+/** Библиотека файлов игры — мастеру. */
+async function listGameFiles(auth, gameId) {
+  const { isGm } = await getMyMembership(auth, gameId);
+  if (!isGm) {
+    throw createHttpError(403, 'Only GM can see the game library');
+  }
+  const result = await pool.query(
+    `SELECT id, kind, url, original_name, mime, size_bytes, width, height, created_at
+     FROM tabletop_files
+     WHERE game_id = $1
+     ORDER BY created_at DESC`,
+    [gameId]
+  );
+  return result.rows.map(mapFileRow);
+}
+
+/** Удалить файл из библиотеки и с диска; из сцен, где он стоит картой, ссылка убирается. */
+async function deleteGameFile(auth, gameId, fileId) {
+  const { isGm } = await getMyMembership(auth, gameId);
+  if (!isGm) {
+    throw createHttpError(403, 'Only GM can delete files');
+  }
+  if (!isUuid(fileId)) {
+    throw createHttpError(400, 'Invalid file id');
+  }
+  const found = await pool.query(
+    'SELECT id, url FROM tabletop_files WHERE id = $1 AND game_id = $2 LIMIT 1',
+    [fileId, gameId]
+  );
+  const row = found.rows[0];
+  if (!row) {
+    throw createHttpError(404, 'File not found');
+  }
+  await pool.query('DELETE FROM tabletop_files WHERE id = $1', [fileId]);
+  await pool.query(
+    `UPDATE tabletop_scenes
+     SET draft_state = CASE WHEN draft_state->>'mapUrl' = $2 THEN draft_state || '{"mapUrl": null}'::jsonb ELSE draft_state END,
+         published_state = CASE WHEN published_state->>'mapUrl' = $2 THEN published_state || '{"mapUrl": null}'::jsonb ELSE published_state END,
+         updated_at = now()
+     WHERE game_id = $1 AND (draft_state->>'mapUrl' = $2 OR published_state->>'mapUrl' = $2)`,
+    [gameId, row.url]
+  );
+  const fileName = path.basename(String(row.url));
+  if (/^[a-f0-9]{32}\.(png|jpg|webp|gif)$/i.test(fileName)) {
+    await fs.unlink(path.join(UPLOADS_VTT_DIR, fileName)).catch(() => {});
+  }
+  return { ok: true };
 }
 
 async function listGameCharacters(auth, gameId) {
@@ -891,6 +1029,9 @@ module.exports = {
   patchSceneState,
   publishScene,
   saveUploadedMap,
+  listGameFiles,
+  deleteGameFile,
+  readImageSize,
   listGameCharacters,
   addGameCharacter,
   removeGameCharacter,
