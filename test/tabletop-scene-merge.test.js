@@ -5,7 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { mergeScenePatch } = require('../src/modules/tabletop/tabletop.service');
+const { mergeScenePatch, filterPublishedStateForPlayer, sanitizeToken } = require('../src/modules/tabletop/tabletop.service');
 
 const base = () => ({
   tokens: [
@@ -39,6 +39,36 @@ test('сцена: удаление — только с tokensMode: replace', () 
   const replaced = mergeScenePatch(base(), { tokens: without, tokensMode: 'replace' });
   assert.equal(replaced.tokens.length, 2);
   assert.ok(!('tokensMode' in replaced));
+});
+
+test('сцена для игрока: хиты только своих токенов, заметки мастера скрыты', () => {
+  const state = {
+    tokens: [
+      { id: 'a', x: 1, y: 1, size: 40, label: 'Мой', ownerUserId: 'u1', hpCurrent: 5, hpMax: 10, tempHp: 2, gmNote: 'секрет', conditions: [{ id: 'c1', slug: 'poisoned', icon: '🤢', label: 'Отравлен' }] },
+      { id: 'b', x: 2, y: 2, size: 40, label: 'Чужой', ownerUserId: 'u2', hpCurrent: 3, hpMax: 9, gmNote: 'тоже секрет' }
+    ]
+  };
+  const view = filterPublishedStateForPlayer(state, 'u1');
+  const mine = view.tokens.find((t) => t.id === 'a');
+  const theirs = view.tokens.find((t) => t.id === 'b');
+  assert.equal(mine.hpCurrent, 5);
+  assert.equal(mine.conditions[0].label, 'Отравлен');
+  assert.ok(!('gmNote' in mine));
+  assert.ok(!('hpCurrent' in theirs) && !('hpMax' in theirs) && !('tempHp' in theirs));
+  assert.ok(!('gmNote' in theirs));
+});
+
+test('токен: значения приводятся к безопасным', () => {
+  const t = sanitizeToken({
+    id: 'a', hpCurrent: '93', hpMax: 'abc', tempHp: -4, gmNote: 'x'.repeat(5000),
+    conditions: Array.from({ length: 20 }, (_, i) => ({ id: `c${i}`, icon: '🔥🔥🔥🔥🔥🔥', label: 'y'.repeat(100) }))
+  });
+  assert.equal(t.hpCurrent, 93);
+  assert.equal(t.hpMax, null);
+  assert.equal(t.tempHp, 0);
+  assert.equal(t.gmNote.length, 2000);
+  assert.equal(t.conditions.length, 12);
+  assert.ok(t.conditions[0].label.length <= 40 && t.conditions[0].icon.length <= 8);
 });
 
 test('сцена: остальные поля патча сливаются как раньше', () => {
