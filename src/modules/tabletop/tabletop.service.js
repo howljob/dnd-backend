@@ -44,7 +44,9 @@ const DEFAULT_SCENE_STATE = {
   initiative: { active: false, round: 1, turnIndex: 0, entries: [] },
   gmNotes: [],
   // Туман: enabled — весь лист скрыт, ops — по порядку «открыть/скрыть» круг или прямоугольник.
-  fog: { enabled: false, ops: [], revealed: [] }
+  fog: { enabled: false, ops: [], revealed: [] },
+  // Рисунки (кисть, круг, прямоугольник) — живут в опубликованной сцене, рисуют все, видят все сразу.
+  drawings: []
 };
 
 function createHttpError(statusCode, message) {
@@ -171,6 +173,90 @@ function sanitizeMeasure(measure, userId) {
     label: shortText(measure?.label, 60),
     at: Date.now()
   };
+}
+
+/* --- Рисунки: кисть (ломаная), круг, прямоугольник --- */
+
+const DRAWING_KINDS = new Set(['path', 'circle', 'rect']);
+const DRAWINGS_MAX = 300;
+const DRAWING_POINTS_MAX = 600;
+const COLOR_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+
+function sanitizeColor(value, fallback) {
+  const s = typeof value === 'string' ? value.trim() : '';
+  if (s === 'none') return 'none';
+  return COLOR_RE.test(s) ? s.toLowerCase() : fallback;
+}
+
+/** Один рисунок с клиента → безопасная запись (автор и время ставит сервер). */
+function sanitizeDrawing(raw, userId) {
+  if (!raw || typeof raw !== 'object') return null;
+  const kind = typeof raw.kind === 'string' ? raw.kind : '';
+  if (!DRAWING_KINDS.has(kind)) return null;
+  const num = (v, min, max) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    return Math.round(Math.min(max, Math.max(min, n)));
+  };
+  const out = {
+    id: shortText(raw.id, 40) || crypto.randomUUID(),
+    kind,
+    stroke: sanitizeColor(raw.stroke, '#ffffff'),
+    fill: kind === 'path' ? 'none' : sanitizeColor(raw.fill, 'none'),
+    width: num(raw.width, 1, 20) ?? 3,
+    userId: userId || null,
+    at: Date.now()
+  };
+  if (kind === 'path') {
+    const points = Array.isArray(raw.points) ? raw.points : [];
+    out.points = points
+      .filter((p) => p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)))
+      .slice(0, DRAWING_POINTS_MAX)
+      .map((p) => ({ x: num(p.x, -100000, 100000), y: num(p.y, -100000, 100000) }));
+    if (out.points.length < 2) return null;
+    return out;
+  }
+  out.x = num(raw.x, -100000, 100000);
+  out.y = num(raw.y, -100000, 100000);
+  if (out.x === null || out.y === null) return null;
+  if (kind === 'circle') {
+    out.r = num(raw.r, 2, 10000);
+    if (out.r === null) return null;
+    return out;
+  }
+  out.w = num(raw.w, 2, 20000);
+  out.h = num(raw.h, 2, 20000);
+  if (out.w === null || out.h === null) return null;
+  return out;
+}
+
+/**
+ * Операции над списком рисунков: add (новые), remove (по id), clear.
+ * Игрок добавляет свои и удаляет только свои; мастер — любые. Лишние старые
+ * рисунки сверх лимита отбрасываются.
+ */
+function applyDrawingOps(current, ops, { userId, isGm }) {
+  const list = Array.isArray(current) ? current.filter((d) => d && d.id) : [];
+  const src = ops && typeof ops === 'object' && !Array.isArray(ops) ? ops : {};
+  let next = list;
+  if (src.clear) {
+    next = isGm ? [] : next.filter((d) => String(d.userId || '') !== String(userId || ''));
+  }
+  if (Array.isArray(src.remove) && src.remove.length) {
+    const ids = new Set(src.remove.map((id) => shortText(id, 40)).filter(Boolean));
+    next = next.filter((d) => !ids.has(d.id) || (!isGm && String(d.userId || '') !== String(userId || '')));
+  }
+  if (Array.isArray(src.add) && src.add.length) {
+    const existing = new Set(next.map((d) => d.id));
+    for (const raw of src.add.slice(0, 20)) {
+      const d = sanitizeDrawing(raw, userId);
+      if (!d || existing.has(d.id)) continue;
+      existing.add(d.id);
+      next = [...next, d];
+    }
+  }
+  if (next.length > DRAWINGS_MAX) next = next.slice(next.length - DRAWINGS_MAX);
+  return next;
 }
 
 /** Поля токена, которые приходят с клиента, приводим к безопасным значениям. */
@@ -442,13 +528,18 @@ async function patchSceneState(auth, gameId, sceneId, body) {
     const cur = normalizeSceneState(scene.published_state);
     const tokenUpdates = Array.isArray(patch.tokens) ? patch.tokens : null;
     const measurePatch = patch.measure && typeof patch.measure === 'object' ? patch.measure : null;
-    const otherKeys = Object.keys(patch).filter((k) => k !== 'tokens' && k !== 'tokensMode' && k !== 'measure');
-    if ((!tokenUpdates && !measurePatch) || otherKeys.length > 0) {
-      throw createHttpError(403, 'Players may only update their own tokens and the ruler');
+    const drawingOps = patch.drawings && typeof patch.drawings === 'object' && !Array.isArray(patch.drawings) ? patch.drawings : null;
+    const otherKeys = Object.keys(patch).filter((k) => !['tokens', 'tokensMode', 'measure', 'drawings'].includes(k));
+    if ((!tokenUpdates && !measurePatch && !drawingOps) || otherKeys.length > 0) {
+      throw createHttpError(403, 'Players may only update their own tokens, the ruler and drawings');
     }
     // Линейка видна всем: игрок может показать своё измерение (две точки, подпись).
     if (measurePatch) {
       cur.measure = sanitizeMeasure(measurePatch, auth.userId);
+    }
+    // Рисунки: игрок добавляет свои и стирает только свои.
+    if (drawingOps) {
+      cur.drawings = applyDrawingOps(cur.drawings, drawingOps, { userId: auth.userId, isGm: false });
     }
     const byId = new Map((cur.tokens || []).map((t) => [t.id, { ...t }]));
     for (const raw of tokenUpdates || []) {
@@ -488,6 +579,11 @@ async function patchSceneState(auth, gameId, sceneId, body) {
   if (Array.isArray(patch.tokens)) safePatch.tokens = patch.tokens.map((t) => sanitizeToken(t));
   if (patch.measure && typeof patch.measure === 'object') safePatch.measure = sanitizeMeasure(patch.measure, auth.userId);
   if (patch.music && typeof patch.music === 'object') safePatch.music = sanitizeMusic(patch.music, current.music);
+  // Рисунки мастера: операции add/remove/clear над текущим списком (целый список извне не принимается).
+  if ('drawings' in patch) {
+    const ops = patch.drawings && typeof patch.drawings === 'object' && !Array.isArray(patch.drawings) ? patch.drawings : {};
+    safePatch.drawings = applyDrawingOps(current.drawings, ops, { userId: auth.userId, isGm: true });
+  }
   const mergedState = mergeScenePatch(current, safePatch);
 
   if (effectiveTarget === 'published') {
@@ -1192,6 +1288,8 @@ module.exports = {
   deepMerge,
   mergeScenePatch,
   sanitizeToken,
+  sanitizeDrawing,
+  applyDrawingOps,
   normalizeSceneState,
   getGameCharacterSheet,
   filterPublishedStateForPlayer,

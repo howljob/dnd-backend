@@ -1,5 +1,12 @@
 # DND Backend Handoff
 
+## 2026-10-07 — Рисунки на карте (ветка fix/drawing)
+
+- `published_state.drawings[]` — кисть (`path`, points ≤ 600), `circle` (x, y, r), `rect` (x, y, w, h); `stroke`/`fill` — `#hex` или `none`, `width` 1–20; `userId` и `at` ставит сервер (`sanitizeDrawing`). Патч принимает только операции `drawings: { add: [...], remove: [ids], clear: true }` (`applyDrawingOps`): игрок добавляет свои и стирает только свои (в т. ч. `clear`), мастер — любые; лимит 300 рисунков на сцену (старые отбрасываются). Живут в опубликованной сцене у всех ролей, как линейка.
+- Тесты: `test/tabletop-scene-merge.test.js`. `npm test` — 20/20.
+
+---
+
 ## 2026-10-07 — Токены: портрет персонажа, размер, закрепление (ветка fix/tokens-2)
 
 - `listGameCharacters` отдаёт `portraitUrl` (uploads/portraits) — фронт ставит портрет картинкой токена при связывании и показывает его у токенов персонажей без своей картинки.
