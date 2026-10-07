@@ -7,18 +7,28 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 12 * 1024 * 1024 }
 });
+// Библиотека принимает и музыку (до 20 МБ); точный предел по виду файла проверяет сервис.
+const uploadLibrary = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 }
+});
 
 // Ошибки multer (слишком большой файл и т. п.) — понятный JSON, а не HTML-страница 500.
-function uploadMapFile(req, res, next) {
-  upload.single('map')(req, res, (error) => {
-    if (!error) return next();
-    const tooLarge = error.code === 'LIMIT_FILE_SIZE';
-    return res.status(400).json({
-      ok: false,
-      code: tooLarge ? 'FILE_TOO_LARGE' : 'UPLOAD_FAILED',
-      message: tooLarge ? 'File too large' : 'Upload failed'
-    });
+function multerErrorToJson(error, res) {
+  const tooLarge = error.code === 'LIMIT_FILE_SIZE';
+  return res.status(400).json({
+    ok: false,
+    code: tooLarge ? 'FILE_TOO_LARGE' : 'UPLOAD_FAILED',
+    message: tooLarge ? 'File too large' : 'Upload failed'
   });
+}
+
+function uploadMapFile(req, res, next) {
+  upload.single('map')(req, res, (error) => (error ? multerErrorToJson(error, res) : next()));
+}
+
+function uploadLibraryFile(req, res, next) {
+  uploadLibrary.single('file')(req, res, (error) => (error ? multerErrorToJson(error, res) : next()));
 }
 
 const tabletopRouter = express.Router();
@@ -51,6 +61,12 @@ tabletopRouter.get(
   '/tabletop/games/:gameId/files',
   requireAuth,
   tabletopController.listGameFiles
+);
+tabletopRouter.post(
+  '/tabletop/games/:gameId/files',
+  requireAuth,
+  uploadLibraryFile,
+  tabletopController.uploadFile
 );
 tabletopRouter.delete(
   '/tabletop/games/:gameId/files/:fileId',
