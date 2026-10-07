@@ -421,6 +421,8 @@ function parseSpellData(row, meta) {
   const data = {
     level,
     levelLabel: level === 0 ? 'Заговор' : `${level} уровень`,
+    // Бросок заклинания для стола: кость урона/лечения, тип, атака или спасбросок, рост.
+    roll: parseSpellRoll(description, level),
     school: String(row.school || '').trim(),
     castTime: String(row.cast_time || '').trim(),
     range: String(row.range || '').trim(),
@@ -458,6 +460,271 @@ function parseSpellData(row, meta) {
   };
 
   return { data, filters };
+}
+
+// ---------------------------------------------------------------------------
+// Бросок заклинания (для панели действий стола)
+// ---------------------------------------------------------------------------
+
+/** Типы урона, как их пишет dnd.su в тексте заклинаний (любой падеж) → именительный. */
+const DAMAGE_TYPE_FORMS = [
+  [/огн[её]м|огня\b/i, 'огонь'],
+  [/холодом/i, 'холод'],
+  [/электричеством/i, 'электричество'],
+  [/кислотой/i, 'кислота'],
+  [/ядом/i, 'яд'],
+  [/некротическ[а-яё]+ энерги[а-яё]+/i, 'некротическая энергия'],
+  [/излучением/i, 'излучение'],
+  [/силов[а-яё]+ пол[а-яё]+/i, 'силовое поле'],
+  [/психическ[а-яё]+ энерги[а-яё]+/i, 'психическая энергия'],
+  [/звуком/i, 'звук'],
+  [/дробящ[а-яё]+/i, 'дробящий'],
+  [/колющ[а-яё]+/i, 'колющий'],
+  [/рубящ[а-яё]+/i, 'рубящий']
+];
+
+const SAVE_ABILITIES = {
+  Силы: 'str', Ловкости: 'dex', Телосложения: 'con', Интеллекта: 'int', Мудрости: 'wis', Харизмы: 'cha'
+};
+
+/** «8к6» / «1к4 + 1» → формула движка бросков «8d6» / «1d4+1». */
+function diceToFormula(text) {
+  const m = String(text || '').match(/(\d+)\s*к\s*(\d+)(?:\s*\+\s*(\d+))?/i);
+  if (!m) return '';
+  return `${m[1]}d${m[2]}${m[3] ? `+${m[3]}` : ''}`;
+}
+
+function detectDamageType(sentence) {
+  for (const [re, canon] of DAMAGE_TYPE_FORMS) {
+    if (re.test(sentence)) return canon;
+  }
+  return '';
+}
+
+/**
+ * Что бросать при касте: из текста заклинания (dnd.su) достаём первую кость
+ * урона или лечения, тип урона, нужен ли бросок атаки заклинанием или спасбросок,
+ * и как растёт кость — по ячейке («…на 1к6 за каждый уровень ячейки выше третьего»)
+ * или по уровню персонажа у заговоров («5-го уровня (2к10), 11-го (3к10), 17-го (4к10)»).
+ * Ничего не выдумывается: если формулировки нет — поле пустое.
+ */
+function parseSpellRoll(descriptionRaw, level) {
+  // dnd.su иногда отдаёт «ё» как «е» + диакритика (NFD) — приводим к обычной форме.
+  const description = String(descriptionRaw || '').normalize('NFC').replace(/\s+/g, ' ').trim();
+  if (!description) return null;
+  const higherIdx = description.search(/На больших уровнях\./);
+  const main = higherIdx === -1 ? description : description.slice(0, higherIdx);
+  const higher = higherIdx === -1 ? '' : description.slice(higherIdx);
+  const sentences = main.split(/(?<=[.!?])\s+/);
+  const hasDice = (s) => /\d+\s*к\s*\d+/i.test(s);
+
+  const damageSentence = sentences.find((s) => hasDice(s) && /урон/i.test(s));
+  const healSentence = sentences.find((s) => hasDice(s) && /(восстанавлива|хит)/i.test(s));
+  const anySentence = sentences.find(hasDice);
+
+  let kind = null;
+  let sentence = '';
+  if (damageSentence) {
+    kind = 'damage';
+    sentence = damageSentence;
+  } else if (healSentence) {
+    kind = 'healing';
+    sentence = healSentence;
+  } else if (anySentence) {
+    kind = 'other';
+    sentence = anySentence;
+  }
+
+  const attackMatch = main.match(/(рукопашн[а-яё]+|дальнобойн[а-яё]+)?\s*атак[а-яё]* заклинанием/i);
+  const saveMatch = main.match(/спасброс[а-яё]+ (Силы|Ловкости|Телосложения|Интеллекта|Мудрости|Харизмы)/);
+
+  const roll = {
+    kind,
+    formula: sentence ? diceToFormula(sentence) : '',
+    damageType: kind === 'damage' ? detectDamageType(sentence) : '',
+    addsAbilityModifier: /модификатор (вашей )?базовой характеристики/i.test(sentence),
+    attack: attackMatch ? (/рукопашн/i.test(attackMatch[1] || '') ? 'melee' : /дальнобойн/i.test(attackMatch[1] || '') ? 'ranged' : 'spell') : null,
+    save: saveMatch ? SAVE_ABILITIES[saveMatch[1]] : null,
+    perSlot: null,
+    cantripScaling: null
+  };
+
+  // Рост по ячейке: «увеличивается на 1к6 за каждый уровень ячейки выше третьего»,
+  // «бросайте дополнительно 1к8 за каждый уровень…», «за каждые две ячейки» → шаг 2.
+  const perSlot = higher.match(/(?:на|дополнительно)\s+(\d+)\s*к\s*(\d+)\s+за\s+кажд[а-яё]+\s+(две|два)?\s*(?:уров|ячей)/i);
+  if (perSlot) {
+    roll.perSlot = { formula: `${perSlot[1]}d${perSlot[2]}`, step: perSlot[3] ? 2 : 1 };
+  }
+
+  // Заговоры: «когда вы достигаете 5-го уровня (2к8), 11-го уровня (3к8) и 17-го уровня (4к8)».
+  if (level === 0) {
+    const scaling = {};
+    const re = /(\d+)(?:-го)?\s+уровня\s*\((\d+)\s*к\s*(\d+)(?:\s+или[^)]*)?\)/gi;
+    let m;
+    while ((m = re.exec(main)) !== null) {
+      scaling[Number(m[1])] = `${m[2]}d${m[3]}`;
+    }
+    if (Object.keys(scaling).length) roll.cantripScaling = scaling;
+  }
+
+  if (!roll.kind && !roll.attack && !roll.save) return null;
+  return roll;
+}
+
+// ---------------------------------------------------------------------------
+// Инвентарь: таблицы оружия и доспехов из markdown статей dnd.su
+// ---------------------------------------------------------------------------
+
+const WEAPON_PROPERTY_KEYS = [
+  [/^боеприпас/i, 'ammunition'],
+  [/^боекомплект/i, 'magazine'],
+  [/^двуручн/i, 'twoHanded'],
+  [/^досягаемост/i, 'reach'],
+  [/^л[её]гк/i, 'light'],
+  [/^метательн/i, 'thrown'],
+  [/^особ/i, 'special'],
+  [/^перезарядк/i, 'loading'],
+  [/^тяж[её]л/i, 'heavy'],
+  [/^универсальн/i, 'versatile'],
+  [/^фехтовальн/i, 'finesse'],
+  [/^взрывн/i, 'burst'],
+  [/^разрывн/i, 'burst']
+];
+
+/** Строки GFM-таблиц markdown → массив таблиц, каждая — массив строк-ячеек. */
+function extractMarkdownTables(markdown) {
+  const lines = String(markdown || '').split(/\r?\n/);
+  const tables = [];
+  let current = null;
+  const isRow = (l) => /^\|.*\|\s*$/.test(l);
+  const isSep = (l) => /^\|(\s*:?-+:?\s*\|)+\s*$/.test(l);
+  for (const raw of lines) {
+    const l = raw.trim();
+    if (isRow(l)) {
+      if (isSep(l)) continue;
+      const cells = l.slice(1, -1).split('|').map((c) => c.trim());
+      if (!current) current = [];
+      current.push(cells);
+    } else if (current) {
+      tables.push(current);
+      current = null;
+    }
+  }
+  if (current) tables.push(current);
+  return tables;
+}
+
+const stripMarks = (s) => String(s || '').replace(/\*\*|__|(^|\s)_|_(\s|$)/g, '$1$2').replace(/[*_]/g, '').trim();
+
+/** Строка таблицы, где заполнена только первая ячейка — заголовок категории. */
+function isCategoryRow(cells) {
+  return cells.length > 1 && Boolean(cells[0]) && cells.slice(1).every((c) => !c);
+}
+
+function parseWeaponRow(cells, category) {
+  const [nameRaw, cost, damageRaw, weight, propsRaw] = cells;
+  const name = stripMarks(nameRaw);
+  if (!name) return null;
+  const damageText = stripMarks(damageRaw || '');
+  const dm = damageText.match(/^(\d+\s*к\s*\d+|\d+)\s*([а-яё]+)?/i);
+  const props = stripMarks(propsRaw || '');
+  const properties = [];
+  const propertyKeys = [];
+  let versatile = '';
+  let range = '';
+  for (const part of props === '-' || props === '—' ? [] : props.split(/,\s*(?![^()]*\))/)) {
+    const p = part.trim();
+    if (!p) continue;
+    properties.push(p);
+    for (const [re, key] of WEAPON_PROPERTY_KEYS) {
+      if (re.test(p)) propertyKeys.push(key);
+    }
+    const v = p.match(/универсальн[а-яё]*\s*\((\d+\s*к\s*\d+)\)/i);
+    if (v) versatile = diceToFormula(v[1]);
+    const r = p.match(/дис\.\s*(\d+)\s*\/\s*(\d+)/i);
+    if (r) range = `${r[1]}/${r[2]}`;
+  }
+  const isRanged = /дальнобойн/i.test(category);
+  return {
+    name,
+    cost: stripMarks(cost || ''),
+    damage: damageText,
+    damageFormula: dm ? (/к/i.test(dm[1]) ? diceToFormula(dm[1]) : dm[1]) : '',
+    damageType: dm && dm[2] ? dm[2] : '',
+    weight: stripMarks(weight || ''),
+    properties,
+    propertyKeys,
+    versatileFormula: versatile,
+    range,
+    category,
+    ranged: isRanged,
+    martial: /воинск/i.test(category)
+  };
+}
+
+/** Таблица «Оружие» (колонки Название / Стоимость / Урон / Вес / Свойства) → строки оружия. */
+function parseWeaponTable(markdown) {
+  const weapons = [];
+  for (const table of extractMarkdownTables(markdown)) {
+    const header = table[0].map(stripMarks);
+    if (!/^(Название|Предмет)$/i.test(header[0] || '') || !/^Урон$/i.test(header[2] || '')) continue;
+    let category = '';
+    for (const cells of table.slice(1)) {
+      if (isCategoryRow(cells)) {
+        category = stripMarks(cells[0]);
+        continue;
+      }
+      const row = parseWeaponRow(cells, category);
+      if (row && (row.damageFormula || row.damage)) weapons.push(row);
+    }
+  }
+  return weapons;
+}
+
+/** Таблица «Доспехи» (Доспех / Стоимость / Класс доспеха (КД) / Сила / Скрытность / Вес). */
+function parseArmorTable(markdown) {
+  const armor = [];
+  for (const table of extractMarkdownTables(markdown)) {
+    const header = table[0].map(stripMarks);
+    if (!/^Доспех$/i.test(header[0] || '') || !/Класс доспеха/i.test(header[2] || '')) continue;
+    let category = '';
+    for (const cells of table.slice(1)) {
+      if (isCategoryRow(cells)) {
+        category = stripMarks(cells[0]);
+        continue;
+      }
+      const name = stripMarks(cells[0]);
+      if (!name) continue;
+      const acText = stripMarks(cells[2] || '');
+      const base = acText.match(/^\+?(\d+)/);
+      const dexMax = acText.match(/макс\.\s*(\d+)/i);
+      armor.push({
+        name,
+        cost: stripMarks(cells[1] || ''),
+        ac: acText,
+        acBase: base ? Number(base[1]) : null,
+        acBonus: /^\+/.test(acText),
+        addsDex: /ЛОВ/i.test(acText),
+        dexMax: dexMax ? Number(dexMax[1]) : null,
+        strength: stripMarks(cells[3] || '').replace(/^[-—]$/, ''),
+        stealthDisadvantage: /помеха/i.test(cells[4] || ''),
+        weight: stripMarks(cells[5] || ''),
+        category
+      });
+    }
+  }
+  return armor;
+}
+
+/** Машиночитаемые данные статьи инвентаря по её слагу dnd.su. */
+function parseInventoryData(slug, markdown) {
+  const data = {};
+  const weapons = parseWeaponTable(markdown);
+  if (weapons.length) data.weapons = weapons;
+  const armor = parseArmorTable(markdown);
+  if (armor.length) data.armor = armor;
+  data.kind = /arms|weapon|firearm/i.test(slug) ? 'weapons' : /armor/i.test(slug) ? 'armor' : 'article';
+  return data;
 }
 
 // ---------------------------------------------------------------------------
@@ -657,6 +924,12 @@ module.exports = {
   parseAbilities,
   parseMonsterStatBlock,
   parseSpellData,
+  parseSpellRoll,
+  diceToFormula,
+  extractMarkdownTables,
+  parseWeaponTable,
+  parseArmorTable,
+  parseInventoryData,
   parseItemHeader,
   parseItemData,
   stripMarkdownTitle,

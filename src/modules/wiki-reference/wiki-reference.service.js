@@ -8,7 +8,10 @@ const SECTION_CONFIG = {
   feats: { table: 'wiki_feats', entityType: 'feat' },
   bestiary: { table: 'wiki_bestiary', entityType: 'monster' },
   items: { table: 'wiki_items', entityType: 'item' },
-  conditions: { table: 'wiki_conditions', entityType: 'condition' }
+  conditions: { table: 'wiki_conditions', entityType: 'condition' },
+  // Инвентарь: статьи dnd.su (оружие, доспехи, снаряжение, инструменты, яды…),
+  // у оружия и доспехов в payload.data — разобранные таблицы для стола.
+  inventory: { table: 'wiki_inventory', entityType: 'inventory' }
 };
 
 /**
@@ -55,7 +58,8 @@ const FILTER_FIELDS = {
     { key: 'attunement', kind: 'boolean' },
     { key: 'source', kind: 'select' }
   ],
-  conditions: []
+  conditions: [],
+  inventory: []
 };
 
 const RARITY_ORDER = ['обычный', 'необычный', 'редкий', 'очень редкий', 'легендарный', 'артефакт', 'варьируется'];

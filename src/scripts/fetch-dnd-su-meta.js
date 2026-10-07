@@ -11,13 +11,16 @@
  *   bestiary/names-ru.json      { [slug]: { name, source, url } }
  *   spells/meta-dnd-su.json     { [link]: { nameRu, nameEn, ritual, typeLine } }
  *   conditions/conditions.json  [ { slug, name, name_en, text, effects, url } ]
+ *   inventory/articles.json     [ { slug, id, name, name_en, source, url, text } ] — статьи
+ *                               раздела «Инвентарь» целиком (markdown), см. dndsu-html.js
  *
- * Скрипт докачивает: записи, которые уже есть в файле, не запрашиваются.
+ * Скрипт докачивает: записи, которые уже есть в файле, не запрашиваются
+ * (для инвентаря перекачать всё — ключ --force).
  * Ничего не выдумывает: если страница не отдала заголовок, записи нет.
  *
  * Запуск (сырой дамп бестиария нужен ради url каждой страницы):
  *   WIKI_OUTPUT_DIR=C:/projects/dnd/output WIKI_ASSETS_DIR=C:/projects/dnd/assets/wiki \
- *   node src/scripts/fetch-dnd-su-meta.js [bestiary|spells|conditions|all]
+ *   node src/scripts/fetch-dnd-su-meta.js [bestiary|spells|conditions|inventory|all]
  */
 const fs = require('fs');
 const path = require('path');
@@ -316,11 +319,99 @@ async function fetchConditions() {
   console.log(`Состояния готовы: ${conditions.length} → ${outPath}`);
 }
 
+// ---------------------------------------------------------------------------
+// Инвентарь — раздел статей dnd.su /articles/inventory/ (оружие, доспехи,
+// снаряжение, инструменты, яды, безделушки…). Каждая статья целиком → markdown.
+// Результат: inventory/articles.json — массив { slug, id, name, name_en, source, url, text }.
+// Сводная статья «Доспехи, Оружие, Снаряжение и Инструменты» пропускается —
+// она дублирует четыре отдельные статьи.
+// ---------------------------------------------------------------------------
+const INVENTORY_LIST_URL = 'https://dnd.su/articles/inventory/';
+const INVENTORY_SKIP = new Set(['armor-arms-equipment-tools']);
+
+function parseInventoryLinks(listHtml) {
+  const links = [...String(listHtml || '').matchAll(/href=['"](\/articles\/inventory\/(\d+)-([a-z0-9_-]+)\/?)['"]/gi)];
+  const seen = new Set();
+  const result = [];
+  for (const m of links) {
+    const slug = m[3].toLowerCase().replace(/_/g, '-');
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+    result.push({ slug, id: Number(m[2]), url: `https://dnd.su${m[1]}` });
+  }
+  return result;
+}
+
+/** Заголовок статьи «Оружие [Arms]» → { name, nameEn }. */
+function parseArticleHeading(pageHtml) {
+  const m = String(pageHtml || '').match(/<h2 class="card-title"[^>]*>([\s\S]*?)<\/h2>/i);
+  const text = m ? decodeEntities(m[1].replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim() : '';
+  const br = text.match(/^(.*?)\s*\[([^\]]+)\]\s*$/);
+  return br ? { name: br[1].trim(), nameEn: br[2].trim() } : { name: text, nameEn: '' };
+}
+
+async function fetchInventory() {
+  const { htmlToMarkdown, extractArticleBody } = require('./dndsu-html');
+  const outPath = path.join(ASSETS_WIKI_DIR, 'inventory', 'articles.json');
+  const existing = readJson(outPath, []);
+  const bySlug = new Map((Array.isArray(existing) ? existing : []).map((a) => [a.slug, a]));
+
+  // Список карточек идёт до конца страницы — читаем её целиком.
+  const list = await fetchHead(INVENTORY_LIST_URL, '</html>', 2000000);
+  if (list.status !== 200 || !list.html) throw new Error(`Список статей инвентаря не загрузился: HTTP ${list.status}`);
+  const links = parseInventoryLinks(list.html).filter((l) => !INVENTORY_SKIP.has(l.slug));
+  if (links.length < 10) throw new Error(`Найдено подозрительно мало статей инвентаря: ${links.length}`);
+  const force = process.argv.includes('--force');
+  const targets = links.filter((l) => force || !bySlug.get(l.slug)?.text);
+  // eslint-disable-next-line no-console
+  console.log(`Инвентарь: статей ${links.length}, уже есть ${links.length - targets.length}, запросить ${targets.length}`);
+
+  const failures = [];
+  await runPool(targets, async (link) => {
+    try {
+      const { status, html } = await fetchHead(link.url, '<h2 class="card-title">Комментарии', 2500000);
+      const title = status === 404 ? null : parseTitle(html);
+      const body = extractArticleBody(html);
+      if (!title || !body) {
+        failures.push(`${link.slug}: ${status === 404 ? '404' : 'нет тела статьи'} ${link.url}`);
+        return;
+      }
+      const heading = parseArticleHeading(html);
+      const text = htmlToMarkdown(body);
+      if (text.length < 200) {
+        failures.push(`${link.slug}: слишком короткий текст (${text.length}) ${link.url}`);
+        return;
+      }
+      bySlug.set(link.slug, {
+        slug: link.slug,
+        id: link.id,
+        name: heading.name || title.name,
+        name_en: heading.nameEn,
+        source: title.source,
+        url: link.url,
+        text
+      });
+    } catch (error) {
+      failures.push(`${link.slug}: ${String(error?.message || error)} ${link.url}`);
+    }
+  });
+
+  const articles = [...bySlug.values()].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, `${JSON.stringify(articles, null, 2)}\n`, 'utf8');
+  // eslint-disable-next-line no-console
+  console.log(`Инвентарь готов: статей в файле ${articles.length}, ошибок ${failures.length}`);
+  if (failures.length) {
+    fs.writeFileSync(path.join(ASSETS_WIKI_DIR, 'inventory', 'articles.failures.txt'), `${failures.join('\n')}\n`, 'utf8');
+  }
+}
+
 async function run() {
   const what = String(process.argv[2] || 'all').toLowerCase();
   if (what === 'bestiary' || what === 'all') await fetchBestiaryNames();
   if (what === 'spells' || what === 'all') await fetchSpellMeta();
   if (what === 'conditions' || what === 'all') await fetchConditions();
+  if (what === 'inventory' || what === 'all') await fetchInventory();
 }
 
 if (require.main === module) {
@@ -331,4 +422,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseTitle, decodeEntities, parseConditionsArticle };
+module.exports = { parseTitle, decodeEntities, parseConditionsArticle, parseInventoryLinks, parseArticleHeading };
