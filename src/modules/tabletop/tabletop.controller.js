@@ -105,7 +105,8 @@ async function uploadMap(req, res) {
         ? {
           buffer: file.buffer,
           mimetype: file.mimetype,
-          size: file.size
+          size: file.size,
+          originalname: file.originalname
         }
         : null
     );
@@ -125,6 +126,25 @@ async function listGameEvents(req, res) {
       ok: true,
       items
     });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+async function listGameFiles(req, res) {
+  try {
+    const items = await tabletopService.listGameFiles(req.auth, req.params.gameId);
+    return res.status(200).json({ ok: true, items });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+async function deleteGameFile(req, res) {
+  try {
+    const result = await tabletopService.deleteGameFile(req.auth, req.params.gameId, req.params.fileId);
+    await notifyTabletopGame(req.params.gameId);
+    return res.status(200).json({ ok: true, ...result });
   } catch (error) {
     return handleError(res, error);
   }
@@ -194,6 +214,8 @@ module.exports = {
   setActiveScene,
   uploadMap,
   listGameEvents,
+  listGameFiles,
+  deleteGameFile,
   getGameCharacterSheet,
   listGameCharacters,
   addGameCharacter,

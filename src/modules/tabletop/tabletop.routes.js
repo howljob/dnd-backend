@@ -48,6 +48,16 @@ tabletopRouter.post(
   tabletopController.uploadMap
 );
 tabletopRouter.get(
+  '/tabletop/games/:gameId/files',
+  requireAuth,
+  tabletopController.listGameFiles
+);
+tabletopRouter.delete(
+  '/tabletop/games/:gameId/files/:fileId',
+  requireAuth,
+  tabletopController.deleteGameFile
+);
+tabletopRouter.get(
   '/tabletop/games/:gameId/characters/:characterId/sheet',
   requireAuth,
   tabletopController.getGameCharacterSheet
