@@ -8,6 +8,19 @@ const upload = multer({
   limits: { fileSize: 12 * 1024 * 1024 }
 });
 
+// Ошибки multer (слишком большой файл и т. п.) — понятный JSON, а не HTML-страница 500.
+function uploadMapFile(req, res, next) {
+  upload.single('map')(req, res, (error) => {
+    if (!error) return next();
+    const tooLarge = error.code === 'LIMIT_FILE_SIZE';
+    return res.status(400).json({
+      ok: false,
+      code: tooLarge ? 'FILE_TOO_LARGE' : 'UPLOAD_FAILED',
+      message: tooLarge ? 'File too large' : 'Upload failed'
+    });
+  });
+}
+
 const tabletopRouter = express.Router();
 
 /* game-scoped VTT (единственная модель стола; legacy «комнаты» удалены в T6.4) */
@@ -31,8 +44,13 @@ tabletopRouter.post(
 tabletopRouter.post(
   '/tabletop/games/:gameId/map-upload',
   requireAuth,
-  upload.single('map'),
+  uploadMapFile,
   tabletopController.uploadMap
+);
+tabletopRouter.get(
+  '/tabletop/games/:gameId/characters/:characterId/sheet',
+  requireAuth,
+  tabletopController.getGameCharacterSheet
 );
 tabletopRouter.get(
   '/tabletop/games/:gameId/events',

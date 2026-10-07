@@ -5,7 +5,8 @@ function handleError(res, error) {
   if ([400, 401, 403, 404, 409].includes(error.statusCode)) {
     return res.status(error.statusCode).json({
       ok: false,
-      message: error.message
+      message: error.message,
+      ...(error.code ? { code: error.code } : {})
     });
   }
 
@@ -129,6 +130,22 @@ async function listGameEvents(req, res) {
   }
 }
 
+async function getGameCharacterSheet(req, res) {
+  try {
+    const item = await tabletopService.getGameCharacterSheet(
+      req.auth,
+      req.params.gameId,
+      req.params.characterId
+    );
+    return res.status(200).json({
+      ok: true,
+      item
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
 async function listGameCharacters(req, res) {
   try {
     const items = await tabletopService.listGameCharacters(req.auth, req.params.gameId);
@@ -177,6 +194,7 @@ module.exports = {
   setActiveScene,
   uploadMap,
   listGameEvents,
+  getGameCharacterSheet,
   listGameCharacters,
   addGameCharacter,
   removeGameCharacter
