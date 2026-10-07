@@ -5,7 +5,49 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { mergeScenePatch, filterPublishedStateForPlayer, sanitizeToken, readImageSize } = require('../src/modules/tabletop/tabletop.service');
+const { mergeScenePatch, filterPublishedStateForPlayer, sanitizeToken, readImageSize, sanitizeDrawing, applyDrawingOps } = require('../src/modules/tabletop/tabletop.service');
+
+test('рисунки: кисть/круг/прямоугольник приводятся к безопасным, мусор отбрасывается', () => {
+  const path = sanitizeDrawing({ kind: 'path', points: [{ x: 1.4, y: 2 }, { x: 10, y: 'x' }, { x: 20, y: 30 }], stroke: '#ABC', fill: '#ff0000', width: 99 }, 'u1');
+  assert.equal(path.kind, 'path');
+  assert.deepEqual(path.points, [{ x: 1, y: 2 }, { x: 20, y: 30 }]);
+  assert.equal(path.stroke, '#abc');
+  assert.equal(path.fill, 'none');
+  assert.equal(path.width, 20);
+  assert.equal(path.userId, 'u1');
+  const circle = sanitizeDrawing({ kind: 'circle', x: 5, y: 6, r: 1, stroke: 'red', fill: '#00ff0080' }, 'u1');
+  assert.equal(circle.r, 2);
+  assert.equal(circle.stroke, '#ffffff');
+  assert.equal(circle.fill, '#00ff0080');
+  const rect = sanitizeDrawing({ kind: 'rect', x: 0, y: 0, w: 50, h: 40, fill: 'none' }, 'u1');
+  assert.equal(rect.w, 50);
+  assert.equal(rect.fill, 'none');
+  assert.equal(sanitizeDrawing({ kind: 'text', x: 0, y: 0 }, 'u1'), null);
+  assert.equal(sanitizeDrawing({ kind: 'path', points: [{ x: 1, y: 1 }] }, 'u1'), null);
+  assert.equal(sanitizeDrawing({ kind: 'circle', x: 'a', y: 0, r: 5 }, 'u1'), null);
+});
+
+test('рисунки: игрок стирает только свои, мастер — любые; лимит списка', () => {
+  const mine = { id: 'm1', kind: 'circle', x: 1, y: 1, r: 5, userId: 'u1' };
+  const other = { id: 'o1', kind: 'circle', x: 1, y: 1, r: 5, userId: 'u2' };
+  const list = [mine, other];
+  const afterPlayerRemove = applyDrawingOps(list, { remove: ['m1', 'o1'] }, { userId: 'u1', isGm: false });
+  assert.deepEqual(afterPlayerRemove.map((d) => d.id), ['o1']);
+  const afterPlayerClear = applyDrawingOps(list, { clear: true }, { userId: 'u1', isGm: false });
+  assert.deepEqual(afterPlayerClear.map((d) => d.id), ['o1']);
+  const afterGmClear = applyDrawingOps(list, { clear: true }, { userId: 'gm', isGm: true });
+  assert.deepEqual(afterGmClear, []);
+  const afterGmRemove = applyDrawingOps(list, { remove: ['o1'] }, { userId: 'gm', isGm: true });
+  assert.deepEqual(afterGmRemove.map((d) => d.id), ['m1']);
+  const added = applyDrawingOps(list, { add: [{ id: 'n1', kind: 'rect', x: 0, y: 0, w: 10, h: 10 }, { id: 'o1', kind: 'rect', x: 0, y: 0, w: 10, h: 10 }, { kind: 'bogus' }] }, { userId: 'u1', isGm: false });
+  assert.deepEqual(added.map((d) => d.id), ['m1', 'o1', 'n1']);
+  assert.equal(added[2].userId, 'u1');
+  const many = Array.from({ length: 300 }, (_, i) => ({ id: `d${i}`, kind: 'circle', x: 0, y: 0, r: 5, userId: 'u1' }));
+  const overflow = applyDrawingOps(many, { add: [{ id: 'last', kind: 'circle', x: 0, y: 0, r: 5 }] }, { userId: 'u1', isGm: false });
+  assert.equal(overflow.length, 300);
+  assert.equal(overflow[0].id, 'd1');
+  assert.equal(overflow[299].id, 'last');
+});
 
 test('размер картинки читается из заголовка PNG', () => {
   const png = Buffer.alloc(33, 0);
