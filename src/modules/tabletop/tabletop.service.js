@@ -246,6 +246,22 @@ function applyDrawingOps(current, ops, { userId, isGm }) {
     const ids = new Set(src.remove.map((id) => shortText(id, 40)).filter(Boolean));
     next = next.filter((d) => !ids.has(d.id) || (!isGm && String(d.userId || '') !== String(userId || '')));
   }
+  // Сдвиг и размер: меняется только геометрия (x, y, r, w, h, points), автор/цвета/время остаются.
+  if (Array.isArray(src.update) && src.update.length) {
+    const updates = new Map(src.update.filter((u) => u && u.id).map((u) => [shortText(u.id, 40), u]));
+    next = next.map((d) => {
+      const u = updates.get(d.id);
+      if (!u) return d;
+      if (!isGm && String(d.userId || '') !== String(userId || '')) return d;
+      const geometry = {};
+      for (const key of ['x', 'y', 'r', 'w', 'h', 'points']) {
+        if (key in u) geometry[key] = u[key];
+      }
+      const merged = sanitizeDrawing({ ...d, ...geometry }, d.userId);
+      if (!merged) return d;
+      return { ...merged, id: d.id, userId: d.userId, at: d.at, stroke: d.stroke, fill: d.fill, width: d.width };
+    });
+  }
   if (Array.isArray(src.add) && src.add.length) {
     const existing = new Set(next.map((d) => d.id));
     for (const raw of src.add.slice(0, 20)) {

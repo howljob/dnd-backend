@@ -3,6 +3,7 @@
 ## 2026-10-07 — Рисунки на карте (ветка fix/drawing)
 
 - `published_state.drawings[]` — кисть (`path`, points ≤ 600), `circle` (x, y, r), `rect` (x, y, w, h); `stroke`/`fill` — `#hex` или `none`, `width` 1–20; `userId` и `at` ставит сервер (`sanitizeDrawing`). Патч принимает только операции `drawings: { add: [...], remove: [ids], clear: true }` (`applyDrawingOps`): игрок добавляет свои и стирает только свои (в т. ч. `clear`), мастер — любые; лимит 300 рисунков на сцену (старые отбрасываются). Живут в опубликованной сцене у всех ролей, как линейка.
+- Операция `update: [{ id, x, y, r, w, h, points }]` (ветка fix/drawing-move) — сдвиг и размер: меняется только геометрия, автор/цвета/время остаются; игрок — только свои.
 - Тесты: `test/tabletop-scene-merge.test.js`. `npm test` — 20/20.
 
 ---

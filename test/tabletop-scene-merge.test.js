@@ -42,6 +42,16 @@ test('рисунки: игрок стирает только свои, маст�
   const added = applyDrawingOps(list, { add: [{ id: 'n1', kind: 'rect', x: 0, y: 0, w: 10, h: 10 }, { id: 'o1', kind: 'rect', x: 0, y: 0, w: 10, h: 10 }, { kind: 'bogus' }] }, { userId: 'u1', isGm: false });
   assert.deepEqual(added.map((d) => d.id), ['m1', 'o1', 'n1']);
   assert.equal(added[2].userId, 'u1');
+  // Сдвиг и размер: игрок — только свои, геометрия проверяется, автор и цвет не меняются.
+  const styled = [{ ...mine, stroke: '#ff0000', width: 5, at: 123 }, { ...other, points: undefined }];
+  const moved = applyDrawingOps(styled, { update: [{ id: 'm1', x: 40, y: 50, r: 9, stroke: '#000000', userId: 'hacker' }, { id: 'o1', x: 99, y: 99 }] }, { userId: 'u1', isGm: false });
+  assert.deepEqual({ x: moved[0].x, y: moved[0].y, r: moved[0].r, stroke: moved[0].stroke, width: moved[0].width, userId: moved[0].userId, at: moved[0].at }, { x: 40, y: 50, r: 9, stroke: '#ff0000', width: 5, userId: 'u1', at: 123 });
+  assert.equal(moved[1].x, 1, 'игрок сдвинул чужой рисунок');
+  const gmMoved = applyDrawingOps(styled, { update: [{ id: 'o1', x: 99, y: 99, r: 1 }] }, { userId: 'gm', isGm: true });
+  assert.deepEqual({ x: gmMoved[1].x, r: gmMoved[1].r }, { x: 99, r: 2 });
+  const pathList = [{ id: 'p1', kind: 'path', points: [{ x: 0, y: 0 }, { x: 10, y: 10 }], userId: 'u1' }];
+  const badPath = applyDrawingOps(pathList, { update: [{ id: 'p1', points: [{ x: 1, y: 1 }] }] }, { userId: 'u1', isGm: false });
+  assert.equal(badPath[0].points.length, 2, 'ломаная из одной точки должна отклоняться');
   const many = Array.from({ length: 300 }, (_, i) => ({ id: `d${i}`, kind: 'circle', x: 0, y: 0, r: 5, userId: 'u1' }));
   const overflow = applyDrawingOps(many, { add: [{ id: 'last', kind: 'circle', x: 0, y: 0, r: 5 }] }, { userId: 'u1', isGm: false });
   assert.equal(overflow.length, 300);
