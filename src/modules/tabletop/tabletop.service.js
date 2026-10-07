@@ -3,6 +3,7 @@ const fs = require('fs/promises');
 const crypto = require('crypto');
 const pool = require('../../db/pool');
 const dice = require('./dice');
+const profileService = require('../profile/profile.service');
 
 const UPLOADS_VTT_DIR = path.join(process.cwd(), 'uploads', 'vtt');
 const ALLOWED_IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
@@ -71,11 +72,14 @@ function mergeScenePatch(current, patch) {
 
   if (Array.isArray(patch.tokens)) {
     const curIds = new Set(curTok.map((t) => t.id));
-    const patchIds = new Set(patch.tokens.map((t) => t && t.id).filter(Boolean));
     const isAdd = patch.tokens.some((t) => t && t.id && !curIds.has(t.id));
-    const isRemove = curTok.some((t) => t.id && !patchIds.has(t.id));
-    if (isAdd || isRemove) {
-      next.tokens = patch.tokens;
+    // Полная замена списка — только когда клиент явно просит (tokensMode: 'replace':
+    // добавление/удаление токена) или присылает новый токен. Частичный список
+    // (сдвиг одного токена) сливается по id, остальные токены не трогаются —
+    // раньше они пропадали, и казалось, что токены «объединяются в один».
+    const replaceAll = patch.tokensMode === 'replace' || isAdd;
+    if (replaceAll) {
+      next.tokens = patch.tokens.filter((t) => t && t.id);
     } else {
       const byId = new Map(curTok.map((t) => [t.id, { ...t }]));
       for (const p of patch.tokens) {
@@ -85,7 +89,7 @@ function mergeScenePatch(current, patch) {
       }
       next.tokens = Array.from(byId.values());
     }
-    const { tokens: _t, ...rest } = patch;
+    const { tokens: _t, tokensMode: _m, ...rest } = patch;
     next = deepMerge(next, rest);
   } else {
     next = deepMerge(current, patch);
@@ -380,11 +384,15 @@ async function saveUploadedMap(auth, gameId, file) {
     throw createHttpError(400, 'File required');
   }
   if (file.size > MAX_MAP_BYTES) {
-    throw createHttpError(400, 'File too large');
+    const error = createHttpError(400, 'File too large');
+    error.code = 'FILE_TOO_LARGE';
+    throw error;
   }
   const mime = String(file.mimetype || '').toLowerCase();
   if (!ALLOWED_IMAGE_MIME.has(mime)) {
-    throw createHttpError(400, 'Invalid image type');
+    const error = createHttpError(400, 'Invalid image type');
+    error.code = 'INVALID_IMAGE_TYPE';
+    throw error;
   }
 
   await fs.mkdir(UPLOADS_VTT_DIR, { recursive: true });
@@ -419,6 +427,42 @@ async function listGameCharacters(auth, gameId) {
     className: row.class_name,
     gameSystem: row.game_system
   }));
+}
+
+/**
+ * Лист персонажа, приведённого за этот стол: владельцу и мастеру игры.
+ * Раньше мастер получал «персонаж не найден», потому что фронт искал лист
+ * только среди собственных персонажей.
+ */
+async function getGameCharacterSheet(auth, gameId, characterId) {
+  const { isGm } = await getMyMembership(auth, gameId);
+  if (!isUuid(characterId)) {
+    throw createHttpError(400, 'Invalid character id');
+  }
+
+  const result = await pool.query(
+    `SELECT uc.*, gc.user_id AS link_user_id, u.display_name AS owner_name
+     FROM game_characters gc
+     INNER JOIN user_characters uc ON uc.id = gc.character_id
+     INNER JOIN users u ON u.id = gc.user_id
+     WHERE gc.game_id = $1 AND gc.character_id = $2
+     LIMIT 1`,
+    [gameId, characterId]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw createHttpError(404, 'Character is not at this table');
+  }
+  if (!isGm && row.link_user_id !== auth.userId) {
+    throw createHttpError(403, 'Only the owner or the GM can view this sheet');
+  }
+
+  return {
+    ...profileService.mapCharacterRow(row),
+    userId: row.link_user_id,
+    ownerName: row.owner_name,
+    isOwner: row.link_user_id === auth.userId
+  };
 }
 
 async function addGameCharacter(auth, gameId, data) {
@@ -656,6 +700,30 @@ async function createActionEvent(auth, gameId, data) {
     if (!ROLL_KINDS.has(kind)) {
       throw createHttpError(400, 'Unknown roll kind');
     }
+    // Помеха/преимущество на попадание и проверку: две попытки, берётся лучшая/худшая.
+    const mode = (kind === 'hit' || kind === 'check')
+      && (item.mode === 'advantage' || item.mode === 'disadvantage')
+      ? item.mode
+      : null;
+    if (mode) {
+      const first = dice.rollFormula(item.formula);
+      const second = dice.rollFormula(item.formula);
+      const chosen = mode === 'advantage'
+        ? (first.total >= second.total ? first : second)
+        : (first.total <= second.total ? first : second);
+      rolls.push({
+        kind,
+        formula: chosen.formula,
+        total: chosen.total,
+        detail: chosen.detail,
+        mode,
+        attempts: [
+          { total: first.total, detail: first.detail },
+          { total: second.total, detail: second.detail }
+        ]
+      });
+      continue;
+    }
     const result = dice.rollFormula(item.formula);
     rolls.push({
       kind,
@@ -748,7 +816,9 @@ async function listTableEvents(auth, gameId, query = {}) {
 module.exports = {
   DEFAULT_SCENE_STATE,
   deepMerge,
+  mergeScenePatch,
   normalizeSceneState,
+  getGameCharacterSheet,
   filterPublishedStateForPlayer,
   getTabletopBundle,
   createScene,
