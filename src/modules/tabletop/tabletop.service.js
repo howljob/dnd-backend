@@ -1242,14 +1242,37 @@ function normalizeShortText(value, maxLength) {
  * Бросок кубиков: формула пересчитывается сервером (dice.rollFormula),
  * клиентский результат не принимается вовсе.
  */
+const ROLL_VISIBILITIES = new Set(['all', 'gm', 'secret']);
+
+/**
+ * Кому виден бросок: all — всем; gm — мастеру и бросавшему; secret — только мастеру,
+ * бросавший видит лишь факт броска без результата. Старое поле private: true = gm.
+ */
+function normalizeRollVisibility(payload) {
+  if (ROLL_VISIBILITIES.has(payload.visibility)) return payload.visibility;
+  return payload.private ? 'gm' : 'all';
+}
+
+/**
+ * Событие глазами конкретного зрителя: секретный бросок не-мастеру (в том числе автору)
+ * отдаётся без результата — только формула и подпись.
+ */
+function eventForViewer(event, viewer) {
+  if (!event || viewer?.isGm) return event;
+  if (event.type !== 'roll' || event.payload?.visibility !== 'secret') return event;
+  const p = event.payload || {};
+  return {
+    ...event,
+    payload: { formula: p.formula, label: p.label || null, mode: p.mode || null, visibility: 'secret', hidden: true }
+  };
+}
+
 async function createRollEvent(auth, gameId, data) {
-  const { isGm } = await getMyMembership(auth, gameId);
+  await getMyMembership(auth, gameId);
   const payload = data && typeof data === 'object' ? data : {};
   const label = normalizeShortText(payload.label, 120);
-  const isPrivate = Boolean(payload.private);
-  if (isPrivate && !isGm) {
-    throw createHttpError(403, 'Only GM can roll privately');
-  }
+  const visibility = normalizeRollVisibility(payload);
+  const isPrivate = visibility !== 'all';
 
   // Преимущество/помеха: формула бросается дважды, берётся лучший/худший итог.
   const mode = payload.mode === 'advantage' || payload.mode === 'disadvantage'
@@ -1272,7 +1295,8 @@ async function createRollEvent(auth, gameId, data) {
         { total: second.total, detail: second.detail }
       ],
       total: chosen.total,
-      detail: chosen.detail
+      detail: chosen.detail,
+      visibility
     };
   } else {
     const roll = dice.rollFormula(payload.formula);
@@ -1280,7 +1304,8 @@ async function createRollEvent(auth, gameId, data) {
       formula: roll.formula,
       label: label || null,
       total: roll.total,
-      detail: roll.detail
+      detail: roll.detail,
+      visibility
     };
   }
 
@@ -1465,6 +1490,10 @@ async function listTableEvents(auth, gameId, query = {}) {
      LIMIT ${limit}`,
     values
   );
+  // Секретные броски в истории игрока — без результата.
+  if (!isGm) {
+    return result.rows.reverse().map((row) => eventForViewer(mapEventRow(row), { isGm: false }));
+  }
 
   // Отдаём по возрастанию id — так проще рисовать ленту.
   return result.rows.map(mapEventRow).reverse();
@@ -1502,6 +1531,7 @@ module.exports = {
   getMyMembership,
   mapSceneRow,
   createRollEvent,
+  eventForViewer,
   createActionEvent,
   createChatEvent,
   createPresenceEvent,
