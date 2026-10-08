@@ -454,6 +454,38 @@ async function getTabletopBundle(auth, gameId) {
   };
 }
 
+const SCENE_ROW_COLUMNS = 'id, game_id, name, sort_order, is_active, draft_state, published_state, created_at, updated_at';
+
+/** Название сцены: без лишних пробелов, не длиннее 180 знаков, пустое → 'Scene'. */
+function normalizeSceneName(raw) {
+  const name = typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim().slice(0, 180) : '';
+  return name || 'Scene';
+}
+
+/** Две сцены одной игры не могут называться одинаково (регистр и пробелы не в счёт). */
+async function assertSceneNameFree(gameId, name, { exceptSceneId = null, client = pool } = {}) {
+  const res = await client.query(
+    `SELECT id FROM tabletop_scenes
+     WHERE game_id = $1 AND lower(name) = lower($2) AND ($3::uuid IS NULL OR id <> $3::uuid)
+     LIMIT 1`,
+    [gameId, name, exceptSceneId]
+  );
+  if (res.rows[0]) {
+    const err = createHttpError(409, 'Scene with this name already exists');
+    err.code = 'SCENE_NAME_TAKEN';
+    throw err;
+  }
+}
+
+/** Следующий порядковый номер — новая сцена встаёт в конец списка. */
+async function nextSceneSortOrder(gameId, client = pool) {
+  const res = await client.query(
+    'SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM tabletop_scenes WHERE game_id = $1',
+    [gameId]
+  );
+  return Number(res.rows[0]?.next) || 0;
+}
+
 async function createScene(auth, gameId, data) {
   const { isGm } = await getMyMembership(auth, gameId);
   if (!isGm) {
@@ -461,18 +493,157 @@ async function createScene(auth, gameId, data) {
   }
 
   const payload = data && typeof data === 'object' ? data : {};
-  const name = typeof payload.name === 'string' ? payload.name.trim().slice(0, 180) : 'Scene';
-  const sortOrder = Number.isFinite(Number(payload.sortOrder)) ? Number(payload.sortOrder) : 0;
+  const name = normalizeSceneName(payload.name);
+  await assertSceneNameFree(gameId, name);
+  const sortOrder = Number.isFinite(Number(payload.sortOrder)) ? Number(payload.sortOrder) : await nextSceneSortOrder(gameId);
 
   const stateJson = JSON.stringify(DEFAULT_SCENE_STATE);
   const result = await pool.query(
     `INSERT INTO tabletop_scenes (game_id, name, sort_order, is_active, draft_state, published_state)
      VALUES ($1, $2, $3, false, $4::jsonb, $4::jsonb)
-     RETURNING id, game_id, name, sort_order, is_active, draft_state, published_state, created_at, updated_at`,
-    [gameId, name || 'Scene', sortOrder, stateJson]
+     RETURNING ${SCENE_ROW_COLUMNS}`,
+    [gameId, name, sortOrder, stateJson]
   );
 
   return mapSceneRow(result.rows[0], { forPlayer: false, isGm: true });
+}
+
+async function renameScene(auth, gameId, sceneId, data) {
+  const { isGm } = await getMyMembership(auth, gameId);
+  if (!isGm) {
+    throw createHttpError(403, 'Only GM can rename scenes');
+  }
+  if (!isUuid(sceneId)) {
+    throw createHttpError(400, 'Invalid scene id');
+  }
+  const payload = data && typeof data === 'object' ? data : {};
+  if (typeof payload.name !== 'string' || !payload.name.trim()) {
+    throw createHttpError(400, 'name required');
+  }
+  const name = normalizeSceneName(payload.name);
+  await assertSceneNameFree(gameId, name, { exceptSceneId: sceneId });
+
+  const result = await pool.query(
+    `UPDATE tabletop_scenes SET name = $3, updated_at = now()
+     WHERE game_id = $1 AND id = $2
+     RETURNING ${SCENE_ROW_COLUMNS}`,
+    [gameId, sceneId, name]
+  );
+  if (!result.rows[0]) {
+    throw createHttpError(404, 'Scene not found');
+  }
+  return mapSceneRow(result.rows[0], { forPlayer: false, isGm: true });
+}
+
+/**
+ * Удалить сцену. Активную и единственную удалить нельзя — стол без сцены не живёт,
+ * а игроки смотрят именно активную.
+ */
+async function deleteScene(auth, gameId, sceneId) {
+  const { isGm } = await getMyMembership(auth, gameId);
+  if (!isGm) {
+    throw createHttpError(403, 'Only GM can delete scenes');
+  }
+  if (!isUuid(sceneId)) {
+    throw createHttpError(400, 'Invalid scene id');
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const all = await client.query(
+      'SELECT id, is_active FROM tabletop_scenes WHERE game_id = $1 FOR UPDATE',
+      [gameId]
+    );
+    const target = all.rows.find((r) => r.id === sceneId);
+    if (!target) {
+      throw createHttpError(404, 'Scene not found');
+    }
+    if (target.is_active) {
+      const err = createHttpError(409, 'Active scene cannot be deleted');
+      err.code = 'SCENE_ACTIVE';
+      throw err;
+    }
+    if (all.rows.length <= 1) {
+      const err = createHttpError(409, 'The only scene cannot be deleted');
+      err.code = 'SCENE_LAST';
+      throw err;
+    }
+    await client.query('DELETE FROM tabletop_scenes WHERE game_id = $1 AND id = $2', [gameId, sceneId]);
+    await client.query('COMMIT');
+    return { id: sceneId };
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/** Имя копии: «Название (копия)», «Название (копия 2)», … — первое свободное. */
+async function pickCopyName(gameId, baseName, client) {
+  const existing = await client.query(
+    'SELECT lower(name) AS n FROM tabletop_scenes WHERE game_id = $1',
+    [gameId]
+  );
+  const taken = new Set(existing.rows.map((r) => r.n));
+  const root = baseName.replace(/\s*\(копия(?: \d+)?\)$/i, '').trim() || baseName;
+  for (let i = 1; i < 1000; i += 1) {
+    const candidate = `${root} (копия${i > 1 ? ` ${i}` : ''})`.slice(0, 180);
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+  return `${root} (копия ${Date.now()})`.slice(0, 180);
+}
+
+/**
+ * Дубликат сцены: карта, сетка, токены, туман, рисунки, инициатива — всё как в оригинале,
+ * и черновик, и опубликованное. Линейка и воспроизведение музыки в копию не переносятся
+ * (это сиюминутное состояние, а не содержимое сцены). Копия встаёт в конец списка, не активна.
+ */
+async function duplicateScene(auth, gameId, sceneId) {
+  const { isGm } = await getMyMembership(auth, gameId);
+  if (!isGm) {
+    throw createHttpError(403, 'Only GM can duplicate scenes');
+  }
+  if (!isUuid(sceneId)) {
+    throw createHttpError(400, 'Invalid scene id');
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const src = await client.query(
+      `SELECT ${SCENE_ROW_COLUMNS} FROM tabletop_scenes WHERE game_id = $1 AND id = $2 LIMIT 1`,
+      [gameId, sceneId]
+    );
+    const row = src.rows[0];
+    if (!row) {
+      throw createHttpError(404, 'Scene not found');
+    }
+    const resetTransient = (state) => {
+      const st = normalizeSceneState(state);
+      st.measure = { ...DEFAULT_SCENE_STATE.measure, points: [] };
+      if (st.music && typeof st.music === 'object') {
+        st.music = { ...st.music, playing: false, startedAt: null, offset: 0 };
+      }
+      return st;
+    };
+    const name = await pickCopyName(gameId, row.name, client);
+    const sortOrder = await nextSceneSortOrder(gameId, client);
+    const inserted = await client.query(
+      `INSERT INTO tabletop_scenes (game_id, name, sort_order, is_active, draft_state, published_state)
+       VALUES ($1, $2, $3, false, $4::jsonb, $5::jsonb)
+       RETURNING ${SCENE_ROW_COLUMNS}`,
+      [gameId, name, sortOrder, JSON.stringify(resetTransient(row.draft_state)), JSON.stringify(resetTransient(row.published_state))]
+    );
+    await client.query('COMMIT');
+    return mapSceneRow(inserted.rows[0], { forPlayer: false, isGm: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 async function setActiveScene(auth, gameId, sceneId) {
@@ -1311,6 +1482,9 @@ module.exports = {
   filterPublishedStateForPlayer,
   getTabletopBundle,
   createScene,
+  renameScene,
+  deleteScene,
+  duplicateScene,
   setActiveScene,
   patchSceneState,
   publishScene,
