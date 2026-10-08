@@ -212,10 +212,32 @@ test('лог событий стола: рассылка, приватность
     const leaked = playerWs.messages.find((m) => m.type === 'event' && m.item?.isPrivate === true);
     assert.equal(leaked, undefined, 'приватный бросок мастера утёк игроку');
 
-    // 2а. Игрок не может бросать приватно.
-    playerWs.ws.send(JSON.stringify({ type: 'rollDice', formula: '1d20', private: true }));
-    const denial = await playerWs.waitFor((m) => m.type === 'error');
-    assert.equal(denial.code, 403);
+    // 2а. Игрок бросает «для мастера»: видят мастер и сам игрок, результат есть у обоих.
+    playerWs.ws.send(JSON.stringify({ type: 'rollDice', formula: '1d20', visibility: 'gm' }));
+    const gmOnly = await masterWs.waitFor((m) => m.type === 'event' && m.item?.type === 'roll' && m.item.payload?.visibility === 'gm');
+    assert.equal(gmOnly.item.isPrivate, true);
+    assert.ok(Number.isInteger(gmOnly.item.payload.total));
+    const gmOnlyMine = await playerWs.waitFor((m) => m.type === 'event' && m.item?.payload?.visibility === 'gm');
+    assert.ok(Number.isInteger(gmOnlyMine.item.payload.total), 'автор видит результат своего броска «для мастера»');
+
+    // 2б. Секретный бросок игрока: мастер видит результат, игрок — только факт броска.
+    playerWs.ws.send(JSON.stringify({ type: 'rollDice', formula: '2d6+1', label: 'Скрытность', visibility: 'secret' }));
+    const secretGm = await masterWs.waitFor((m) => m.type === 'event' && m.item?.payload?.visibility === 'secret');
+    assert.ok(Number.isInteger(secretGm.item.payload.total), 'мастеру секретный результат нужен');
+    assert.equal(secretGm.item.payload.hidden, undefined);
+    const secretMine = await playerWs.waitFor((m) => m.type === 'event' && m.item?.payload?.visibility === 'secret');
+    assert.equal(secretMine.item.payload.total, undefined, 'игрок не должен видеть секретный результат');
+    assert.equal(secretMine.item.payload.detail, undefined);
+    assert.equal(secretMine.item.payload.hidden, true);
+    assert.equal(secretMine.item.payload.formula, '2d6+1');
+    assert.equal(secretMine.item.payload.label, 'Скрытность');
+    // В истории REST игрок тоже не видит результат, мастер видит.
+    const secretHistoryPlayer = await api('GET', `/api/tabletop/games/${gameId}/events`, undefined, player.token);
+    const secretRowPlayer = secretHistoryPlayer.json.items.find((e) => e.payload?.visibility === 'secret');
+    assert.ok(secretRowPlayer && secretRowPlayer.payload.hidden === true && secretRowPlayer.payload.total === undefined);
+    const secretHistoryMaster = await api('GET', `/api/tabletop/games/${gameId}/events`, undefined, master.token);
+    const secretRowMaster = secretHistoryMaster.json.items.find((e) => e.payload?.visibility === 'secret');
+    assert.ok(secretRowMaster && Number.isInteger(secretRowMaster.payload.total));
 
     // 3. Действие-заклинание в ленте у обоих со всеми частями.
     playerWs.ws.send(JSON.stringify({
@@ -261,11 +283,13 @@ test('лог событий стола: рассылка, приватность
     const playerEvents = await api('GET', `/api/tabletop/games/${gameId}/events`, undefined, player.token);
     assert.equal(playerEvents.status, 200);
     assert.ok(playerEvents.json.items.length >= 2);
+    // Свои броски «для мастера»/секретные игрок в истории видит, чужие приватные — нет.
     assert.equal(
-      playerEvents.json.items.find((e) => e.isPrivate),
+      playerEvents.json.items.find((e) => e.isPrivate && e.actorUserId !== player.user.id),
       undefined,
-      'приватное событие в истории игрока'
+      'чужое приватное событие в истории игрока'
     );
+    assert.ok(playerEvents.json.items.some((e) => e.isPrivate && e.actorUserId === player.user.id), 'свой приватный бросок в истории игрока должен быть');
     const masterEvents = await api('GET', `/api/tabletop/games/${gameId}/events`, undefined, master.token);
     assert.ok(masterEvents.json.items.some((e) => e.isPrivate), 'мастер не видит приватное в истории');
 
@@ -302,7 +326,10 @@ test('лог событий стола: рассылка, приватность
 
       const history = await reconnect.waitFor((m) => m.type === 'events');
       assert.ok(history.items.length >= 2, 'история при переподключении пуста');
-      assert.equal(history.items.find((e) => e.isPrivate), undefined);
+      // Чужих приватных событий в истории игрока нет; свой секретный бросок — без результата.
+      assert.equal(history.items.find((e) => e.isPrivate && e.actorUserId !== player.user.id), undefined);
+      const secretInHistory = history.items.find((e) => e.payload?.visibility === 'secret');
+      assert.ok(secretInHistory && secretInHistory.payload.hidden === true && secretInHistory.payload.total === undefined);
       assert.ok(
         history.items.some((e) => e.payload?.label === 'пока игрока нет'),
         'пропущенный бросок не докачался'

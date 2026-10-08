@@ -92,7 +92,9 @@ function attachTabletopWs(httpServer) {
     for (const client of set) {
       if (client.ws.readyState !== WebSocket.OPEN) continue;
       if (event.isPrivate && !client.isGm && client.userId !== event.actorUserId) continue;
-      client.ws.send(JSON.stringify({ type: 'event', item: event }));
+      // Секретный бросок автору уходит без результата (его видит только мастер).
+      const item = tabletopService.eventForViewer(event, { isGm: client.isGm });
+      client.ws.send(JSON.stringify({ type: 'event', item }));
     }
   }
 
@@ -192,7 +194,8 @@ function attachTabletopWs(httpServer) {
             formula: msg.formula,
             label: msg.label,
             mode: msg.mode,
-            private: msg.private
+            private: msg.private,
+            visibility: msg.visibility
           });
           broadcastEvent(client.gameId, event);
           return;

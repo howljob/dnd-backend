@@ -1,5 +1,13 @@
 # DND Backend Handoff
 
+## 2026-10-08 — Видимость бросков: все / мастер / секрет (ветка fix/dice-menu)
+
+- Кадр `rollDice` принимает `visibility`: `all` (всем), `gm` (мастеру и бросавшему; старое `private: true` = `gm`, теперь доступно и игрокам), `secret` (только мастеру). В `payload` события пишется `visibility`; `is_private` = не `all`.
+- `eventForViewer(event, { isGm })`: секретный бросок не-мастеру (в том числе автору) отдаётся без `total/detail/attempts`, с `hidden: true` — применяется в рассылке WS (`broadcastEvent`) и в истории (`listTableEvents` для игрока, то есть и REST, и `events` при подписке).
+- Тест: `test/tabletop-events.test.js` (шаги 2а/2б, история). `npm test` — 21/21.
+
+---
+
 ## 2026-10-08 — Сцены: уникальные названия, переименование, дубликат, удаление (ветка fix/scenes)
 
 - Название сцены уникально в игре (без учёта регистра и лишних пробелов): `POST …/scenes` и `POST …/scenes/:id/rename` отвечают 409 `SCENE_NAME_TAKEN`. Новая сцена встаёт в конец (`sort_order` = max+1).
