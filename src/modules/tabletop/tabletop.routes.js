@@ -52,6 +52,21 @@ tabletopRouter.post(
   tabletopController.setActiveScene
 );
 tabletopRouter.post(
+  '/tabletop/games/:gameId/scenes/:sceneId/rename',
+  requireAuth,
+  tabletopController.renameScene
+);
+tabletopRouter.post(
+  '/tabletop/games/:gameId/scenes/:sceneId/duplicate',
+  requireAuth,
+  tabletopController.duplicateScene
+);
+tabletopRouter.delete(
+  '/tabletop/games/:gameId/scenes/:sceneId',
+  requireAuth,
+  tabletopController.deleteScene
+);
+tabletopRouter.post(
   '/tabletop/games/:gameId/map-upload',
   requireAuth,
   uploadMapFile,

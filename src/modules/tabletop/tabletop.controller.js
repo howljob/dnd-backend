@@ -78,6 +78,36 @@ async function publishScene(req, res) {
   }
 }
 
+async function renameScene(req, res) {
+  try {
+    const scene = await tabletopService.renameScene(req.auth, req.params.gameId, req.params.sceneId, req.body);
+    await notifyTabletopGame(req.params.gameId);
+    return res.status(200).json({ ok: true, scene });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+async function deleteScene(req, res) {
+  try {
+    const result = await tabletopService.deleteScene(req.auth, req.params.gameId, req.params.sceneId);
+    await notifyTabletopGame(req.params.gameId);
+    return res.status(200).json({ ok: true, ...result });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+async function duplicateScene(req, res) {
+  try {
+    const scene = await tabletopService.duplicateScene(req.auth, req.params.gameId, req.params.sceneId);
+    await notifyTabletopGame(req.params.gameId);
+    return res.status(201).json({ ok: true, scene });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
 async function setActiveScene(req, res) {
   try {
     const scene = await tabletopService.setActiveScene(
@@ -235,6 +265,9 @@ module.exports = {
   postScene,
   patchScene,
   publishScene,
+  renameScene,
+  deleteScene,
+  duplicateScene,
   setActiveScene,
   uploadMap,
   listGameEvents,
