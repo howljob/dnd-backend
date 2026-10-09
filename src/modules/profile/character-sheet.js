@@ -131,6 +131,9 @@ function normalizeSheet(rawSheet, level, options = {}) {
 
   const combatSource = source.combat || {};
   const hpMax = clampInt(combatSource.hpMax, 1, 999, 10);
+  const deathSource = combatSource.deathSaves && typeof combatSource.deathSaves === 'object' && !Array.isArray(combatSource.deathSaves)
+    ? combatSource.deathSaves
+    : {};
   const combat = {
     armorClass: clampInt(combatSource.armorClass, 0, 99, 10),
     initiative: clampInt(combatSource.initiative, -20, 20, 0),
@@ -138,13 +141,30 @@ function normalizeSheet(rawSheet, level, options = {}) {
     hpCurrent: clampInt(combatSource.hpCurrent, 0, 999, hpMax),
     hpMax,
     tempHp: clampInt(combatSource.tempHp, 0, 999, 0),
-    hitDice: cappedText(combatSource.hitDice || '1d10', 50)
+    hitDice: cappedText(combatSource.hitDice || '1d10', 50),
+    // Потраченные кости хитов (короткий отдых) и спасброски от смерти — игровые поля первой страницы листа.
+    hitDiceUsed: clampInt(combatSource.hitDiceUsed, 0, 20, 0),
+    deathSaves: {
+      successes: clampInt(deathSource.successes, 0, 3, 0),
+      failures: clampInt(deathSource.failures, 0, 3, 0)
+    }
+  };
+
+  /** Уровень заклинания: число 0–9 либо разбор строки «3 уровень» / «заговор» из старых записей. */
+  const spellLevelOf = (item) => {
+    if (Number.isFinite(Number(item.level)) && item.level !== '' && item.level !== null) {
+      return clampInt(item.level, 0, 9, 0);
+    }
+    const typeText = String(item.type || '').toLowerCase();
+    if (/заговор|cantrip/.test(typeText)) return 0;
+    const m = typeText.match(/(\d)/);
+    return m ? clampInt(m[1], 0, 9, 0) : 0;
   };
 
   const spells = (Array.isArray(source.spells) ? source.spells : [])
     .map((item) => {
       if (typeof item === 'string') {
-        return { name: cappedText(item, 160) };
+        return { name: cappedText(item, 160), level: 0, prepared: false };
       }
       if (!item || typeof item !== 'object' || Array.isArray(item)) {
         throw createHttpError(400, 'Sheet spell entry must be an object');
@@ -156,11 +176,13 @@ function normalizeSheet(rawSheet, level, options = {}) {
         range: cappedText(item.range, 80),
         components: cappedText(item.components, 120),
         duration: cappedText(item.duration, 80),
-        description: cappedText(item.description, 1000)
+        description: cappedText(item.description, 1000),
+        level: spellLevelOf(item),
+        prepared: Boolean(item.prepared)
       };
     })
     .filter((item) => item.name)
-    .slice(0, 40)
+    .slice(0, 120)
     .map((item) => ({
       name: item.name,
       type: item.type || '',
@@ -168,8 +190,67 @@ function normalizeSheet(rawSheet, level, options = {}) {
       range: item.range || '',
       components: item.components || '',
       duration: item.duration || '',
-      description: item.description || ''
+      description: item.description || '',
+      level: item.level,
+      prepared: item.prepared
     }));
+
+  // Третья страница листа: класс заклинателя, базовая характеристика, ячейки по кругам (итого / потрачено).
+  const castingSource = source.spellcasting && typeof source.spellcasting === 'object' && !Array.isArray(source.spellcasting)
+    ? source.spellcasting
+    : {};
+  const castAbility = String(castingSource.ability || '').toLowerCase();
+  const spellcasting = {
+    className: cappedText(castingSource.className, 120),
+    ability: ['int', 'wis', 'cha'].includes(castAbility) ? castAbility : ''
+  };
+  const slotsSource = source.spellSlots && typeof source.spellSlots === 'object' && !Array.isArray(source.spellSlots)
+    ? source.spellSlots
+    : {};
+  const spellSlots = {};
+  for (let lvl = 1; lvl <= 9; lvl += 1) {
+    const row = slotsSource[lvl] && typeof slotsSource[lvl] === 'object' ? slotsSource[lvl] : {};
+    const total = clampInt(row.total, 0, 20, 0);
+    spellSlots[lvl] = { total, used: clampInt(row.used, 0, 20, 0) };
+  }
+
+  // Таблица «Атаки и заклинания» (строки, добавленные руками): название, бонус атаки, урон/вид.
+  if (typeof source.attacks !== 'undefined' && !Array.isArray(source.attacks)) {
+    throw createHttpError(400, 'Sheet attacks must be an array');
+  }
+  const attacks = (Array.isArray(source.attacks) ? source.attacks : [])
+    .map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+      return {
+        name: cappedText(item.name, 120),
+        bonus: cappedText(item.bonus, 40),
+        damage: cappedText(item.damage, 80)
+      };
+    })
+    .filter((item) => item && (item.name || item.bonus || item.damage))
+    .slice(0, 20);
+
+  // Кошелёк: медные, серебряные, электрумовые, золотые, платиновые.
+  const moneySource = source.money && typeof source.money === 'object' && !Array.isArray(source.money) ? source.money : {};
+  const money = {};
+  for (const coin of ['cp', 'sp', 'ep', 'gp', 'pp']) {
+    money[coin] = clampInt(moneySource[coin], 0, 999999, 0);
+  }
+
+  // Вторая страница: внешность, союзники и организации, особенности, сокровища.
+  const appearanceSource = source.appearance && typeof source.appearance === 'object' && !Array.isArray(source.appearance)
+    ? source.appearance
+    : {};
+  const appearance = {};
+  for (const key of ['age', 'height', 'weight', 'eyes', 'skin', 'hair']) {
+    appearance[key] = cappedText(appearanceSource[key], 60);
+  }
+  const alliesSource = source.allies && typeof source.allies === 'object' && !Array.isArray(source.allies) ? source.allies : {};
+  const allies = {
+    text: cappedText(alliesSource.text, 3000),
+    orgName: cappedText(alliesSource.orgName, 160),
+    symbol: cappedText(alliesSource.symbol, 40)
+  };
 
   const equipment = (Array.isArray(source.equipment) ? source.equipment : [])
     .map((item) => cappedText(item, 300))
@@ -203,7 +284,20 @@ function normalizeSheet(rawSheet, level, options = {}) {
       bonds: cappedText(personalitySource.bonds, 500),
       flaws: cappedText(personalitySource.flaws, 500)
     },
-    weaponOverrides
+    weaponOverrides,
+    // Первая страница официального листа: владения и языки, умения и способности, атаки, кошелёк.
+    proficienciesLanguages: cappedText(source.proficienciesLanguages, 2000),
+    featuresTraits: cappedText(source.featuresTraits, 4000),
+    attacks,
+    money,
+    // Вторая страница.
+    appearance,
+    allies,
+    additionalFeatures: cappedText(source.additionalFeatures, 4000),
+    treasure: cappedText(source.treasure, 4000),
+    // Третья страница.
+    spellcasting,
+    spellSlots
   };
 
   // Легаси-портрет сохраняется только сервером (из БД), с клиента — никогда.
