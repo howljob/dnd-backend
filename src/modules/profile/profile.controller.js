@@ -1,4 +1,5 @@
 const profileService = require('./profile.service');
+const roll20ImportService = require('./roll20-import.service');
 
 function handleError(res, error) {
   // 403/409 добавлены в T8.1: запрет оценки вне сессии и повторной оценки.
@@ -128,6 +129,27 @@ async function uploadCharacterPortrait(req, res) {
   }
 }
 
+/**
+ * Перенос персонажа из Roll20: PDF листа → черновик (не сохраняется) + список «проверьте».
+ * Ошибки разбора отдаются с кодом (NOT_PDF, NOT_ROLL20_SHEET, PDF_UNREADABLE, …) — фронт
+ * показывает по нему понятное сообщение.
+ */
+async function importRoll20Character(req, res) {
+  try {
+    const draft = await roll20ImportService.importRoll20Pdf(req.file);
+    return res.status(200).json({
+      ok: true,
+      character: draft.character,
+      report: draft.report
+    });
+  } catch (error) {
+    if ([400, 422].includes(error.statusCode)) {
+      return res.status(error.statusCode).json({ ok: false, code: error.code || '', message: error.message });
+    }
+    return handleError(res, error);
+  }
+}
+
 async function deleteCharacterPortrait(req, res) {
   try {
     const character = await profileService.deleteCharacterPortrait(req.auth, req.params.id);
@@ -247,6 +269,7 @@ module.exports = {
   deleteCharacter,
   uploadCharacterPortrait,
   deleteCharacterPortrait,
+  importRoll20Character,
   getRating,
   getRatingSessionContext,
   listSecuritySessions,
