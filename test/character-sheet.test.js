@@ -75,6 +75,37 @@ test('лист: поля трёх страниц официального лис
   assert.throws(() => normalizeSheet({ attacks: 'нет' }, 1), (e) => e.statusCode === 400);
 });
 
+test('лист: избранные броски — только известные виды, без повторов, ключ проверяется', () => {
+  const sheet = normalizeSheet({
+    favorites: [
+      { type: 'check', key: 'str' },
+      { type: 'check', key: 'str' },
+      { type: 'save', key: 'luck' },
+      { type: 'skill', key: 'stealth' },
+      { type: 'skill', key: 'flying' },
+      { type: 'initiative', key: 'что угодно' },
+      { type: 'spellattack' },
+      { type: 'weapon', key: 'Длинный меч' },
+      { type: 'weapon', key: 'длинный МЕЧ' },
+      { type: 'spell', key: 'Огненный шар' },
+      { type: 'attack', key: '' },
+      { type: 'death' },
+      'мусор'
+    ]
+  }, 3);
+  assert.deepEqual(sheet.favorites, [
+    { type: 'check', key: 'str' },
+    { type: 'skill', key: 'stealth' },
+    { type: 'initiative', key: '' },
+    { type: 'spellattack', key: '' },
+    { type: 'weapon', key: 'Длинный меч' },
+    { type: 'spell', key: 'Огненный шар' }
+  ]);
+  assert.deepEqual(normalizeSheet({}, 1).favorites, []);
+  const many = normalizeSheet({ favorites: Array.from({ length: 60 }, (_, i) => ({ type: 'weapon', key: `Меч ${i}` })) }, 1);
+  assert.equal(many.favorites.length, 40);
+});
+
 test('лист: без своих формул — пустой объект; массив вместо объекта — ошибка 400', () => {
   assert.deepEqual(normalizeSheet({}, 1).weaponOverrides, {});
   assert.throws(() => normalizeSheet({ weaponOverrides: [1, 2] }, 1), (e) => e.statusCode === 400);

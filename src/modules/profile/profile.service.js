@@ -499,6 +499,17 @@ async function createCharacter(auth, data) {
 
 async function updateCharacter(auth, characterId, data) {
   const existing = await getOwnedCharacterRow(auth, characterId);
+  return updateCharacterRow(existing, data);
+}
+
+/**
+ * Сохранение персонажа по уже проверенной строке user_characters (владелец — row.user_id).
+ * Общий путь для владельца (updateCharacter) и мастера игры, правящего лист игрока за столом
+ * (tabletop.service.updateGameCharacterSheet — права проверяет он).
+ */
+async function updateCharacterRow(existing, data) {
+  const characterId = existing.id;
+  const ownerUserId = existing.user_id;
   const { sheet: existingSheet } = parseSheetColumn(existing);
 
   const payload = normalizeCharacterPayload(data, {
@@ -542,7 +553,7 @@ async function updateCharacter(auth, characterId, data) {
      RETURNING ${CHARACTER_COLUMNS}`,
     [
       characterId,
-      auth.userId,
+      ownerUserId,
       payload.name,
       payload.gameSystem,
       payload.className,
@@ -1279,6 +1290,7 @@ module.exports = {
   listCharacters,
   createCharacter,
   updateCharacter,
+  updateCharacterRow,
   deleteCharacter,
   uploadCharacterPortrait,
   deleteCharacterPortrait,

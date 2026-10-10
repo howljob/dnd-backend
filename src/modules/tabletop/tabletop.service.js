@@ -1049,7 +1049,7 @@ async function listGameCharacters(auth, gameId) {
   await getMyMembership(auth, gameId);
 
   const result = await pool.query(
-    `SELECT gc.id, gc.character_id, gc.user_id, uc.name, uc.level, uc.class_name, uc.game_system, uc.portrait_path
+    `SELECT gc.id, gc.character_id, gc.user_id, gc.created_at, uc.name, uc.level, uc.class_name, uc.game_system, uc.portrait_path
      FROM game_characters gc
      INNER JOIN user_characters uc ON uc.id = gc.character_id
      WHERE gc.game_id = $1
@@ -1065,6 +1065,8 @@ async function listGameCharacters(auth, gameId) {
     level: row.level,
     className: row.class_name,
     gameSystem: row.game_system,
+    // Когда персонажа привели за стол — вкладка «Персонаж» показывает игроку последнего.
+    linkedAt: row.created_at,
     // Портрет персонажа — токен берёт его картинкой автоматически.
     portraitUrl: row.portrait_path ? portraitStorage.portraitUrl(row.portrait_path) : null
   }));
@@ -1100,6 +1102,41 @@ async function getGameCharacterSheet(auth, gameId, characterId) {
 
   return {
     ...profileService.mapCharacterRow(row),
+    userId: row.link_user_id,
+    ownerName: row.owner_name,
+    isOwner: row.link_user_id === auth.userId
+  };
+}
+
+/**
+ * Мастер игры правит лист персонажа игрока, приведённого за этот стол (помочь исправить,
+ * добавить, удалить). Сохраняется сам шаблон персонажа игрока — тот же, что игрок правит
+ * в мастерской. Владелец тоже может сохранять этим путём. Портрет здесь не меняется.
+ */
+async function updateGameCharacterSheet(auth, gameId, characterId, data) {
+  const { isGm } = await getMyMembership(auth, gameId);
+  if (!isUuid(characterId)) {
+    throw createHttpError(400, 'Invalid character id');
+  }
+  const result = await pool.query(
+    `SELECT uc.*, gc.user_id AS link_user_id, u.display_name AS owner_name
+     FROM game_characters gc
+     INNER JOIN user_characters uc ON uc.id = gc.character_id
+     INNER JOIN users u ON u.id = gc.user_id
+     WHERE gc.game_id = $1 AND gc.character_id = $2
+     LIMIT 1`,
+    [gameId, characterId]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw createHttpError(404, 'Character is not at this table');
+  }
+  if (!isGm && row.user_id !== auth.userId) {
+    throw createHttpError(403, 'Only the owner or the GM can edit this sheet');
+  }
+  const saved = await profileService.updateCharacterRow(row, data);
+  return {
+    ...saved,
     userId: row.link_user_id,
     ownerName: row.owner_name,
     isOwner: row.link_user_id === auth.userId
@@ -1516,6 +1553,7 @@ module.exports = {
   applyDrawingOps,
   normalizeSceneState,
   getGameCharacterSheet,
+  updateGameCharacterSheet,
   filterPublishedStateForPlayer,
   getTabletopBundle,
   createScene,
