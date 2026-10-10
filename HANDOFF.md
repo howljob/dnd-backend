@@ -1,5 +1,12 @@
 # DND Backend Handoff
 
+## 2026-10-10 — Токены: поворот и показ имени (ветка fix/tokens-3)
+
+- `sanitizeToken`: `rotation` — целые градусы 0–359 по кругу (725 → 5, −90 → 270, мусор → 0), `showName` — только `true` даёт показ имени. Игрок-владелец может менять `rotation` своего токена (как x/y/size, кроме закреплённого); `showName` — только мастер. Миграций нет.
+- Тест: `test/tabletop-scene-merge.test.js`. `npm test` — 23/23.
+
+---
+
 ## 2026-10-09 — Лист персонажа: поля трёх страниц официального листа (ветка fix/character-sheet2)
 
 - `normalizeSheet` (`src/modules/profile/character-sheet.js`) принимает и зажимает новые поля, миграций нет (jsonb `user_characters.sheet`): `combat.hitDiceUsed` (0–20), `combat.deathSaves {successes, failures}` (0–3); `proficienciesLanguages` (2000), `featuresTraits` (4000); `attacks[]` ({name, bonus, damage}, до 20, пустые строки отбрасываются, не массив → 400); `money {cp, sp, ep, gp, pp}`; `appearance {age, height, weight, eyes, skin, hair}` (по 60); `allies {text, orgName, symbol}`; `additionalFeatures`, `treasure` (4000); `spellcasting {className, ability ∈ int|wis|cha|''}`; `spellSlots {1..9: {total, used}}` (0–20, всегда все девять кругов); у заклинаний `level` 0–9 (нет — разбор из `type`: «заговор» → 0, первая цифра → круг) и `prepared`, лимит 120 записей.
