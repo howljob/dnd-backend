@@ -106,6 +106,37 @@ test('лист: избранные броски — только известн�
   assert.equal(many.favorites.length, 40);
 });
 
+test('лист: снаряжение — количество и вес, старые строки — по одному; умения списком', () => {
+  const sheet = normalizeSheet({
+    equipment: [
+      'Верёвка',
+      { name: 'Стрелы', qty: '20', weight: '1,5' },
+      { name: 'Зелье', qty: 0, weight: '' },
+      { name: '', qty: 3 },
+      { name: 'Камень', qty: 99999, weight: -5 }
+    ],
+    features: [
+      { name: 'Второе дыхание', source: 'Класс', roll: '1d10+5', description: 'Бонусным действием…', collapsed: 'yes' },
+      { name: '', description: '', roll: '' },
+      { name: 'Тёмное зрение', source: 'Раса', description: 'Радиус 60 футов' }
+    ],
+    favorites: [{ type: 'feature', key: 'Второе дыхание' }]
+  }, 3);
+  assert.deepEqual(sheet.equipment, [
+    { name: 'Верёвка', qty: 1, weight: null },
+    { name: 'Стрелы', qty: 20, weight: 1.5 },
+    { name: 'Зелье', qty: 1, weight: null },
+    { name: 'Камень', qty: 9999, weight: 0 }
+  ]);
+  assert.deepEqual(sheet.features, [
+    { name: 'Второе дыхание', source: 'Класс', roll: '1d10+5', description: 'Бонусным действием…', collapsed: true },
+    { name: 'Тёмное зрение', source: 'Раса', roll: '', description: 'Радиус 60 футов', collapsed: false }
+  ]);
+  assert.deepEqual(sheet.favorites, [{ type: 'feature', key: 'Второе дыхание' }]);
+  assert.deepEqual(normalizeSheet({}, 1).features, []);
+  assert.throws(() => normalizeSheet({ features: 'текст' }, 1), (e) => e.statusCode === 400);
+});
+
 test('лист: без своих формул — пустой объект; массив вместо объекта — ошибка 400', () => {
   assert.deepEqual(normalizeSheet({}, 1).weaponOverrides, {});
   assert.throws(() => normalizeSheet({ weaponOverrides: [1, 2] }, 1), (e) => e.statusCode === 400);

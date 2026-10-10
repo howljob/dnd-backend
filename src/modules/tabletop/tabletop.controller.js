@@ -187,7 +187,7 @@ async function uploadFile(req, res) {
 
 async function listGameFiles(req, res) {
   try {
-    const items = await tabletopService.listGameFiles(req.auth, req.params.gameId);
+    const items = await tabletopService.listGameFiles(req.auth, req.params.gameId, { scope: req.query.scope });
     return res.status(200).json({ ok: true, items });
   } catch (error) {
     return handleError(res, error);

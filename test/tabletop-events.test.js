@@ -255,6 +255,34 @@ test('лог событий стола: рассылка, приватность
     assert.equal(actionMsg.item.payload.spellLevel, 3);
     assert.equal(actionMsg.item.payload.rolls.length, 1);
     assert.ok(actionMsg.item.payload.rolls[0].total >= 8 && actionMsg.item.payload.rolls[0].total <= 48);
+    assert.equal(actionMsg.item.payload.visibility, 'all');
+    assert.equal(actionMsg.item.isPrivate, false);
+    // Подробности по каждой кости — для ленты «15 [6,3,2+4]».
+    assert.match(actionMsg.item.payload.rolls[0].detail, /^8d6\[(\d+,){7}\d+\]$/);
+
+    // 3а. Секретное действие (атака из листа): мастер видит результат, бросавший — только факт.
+    playerWs.ws.send(JSON.stringify({
+      type: 'action',
+      actionType: 'attack',
+      source: 'Секретный кинжал',
+      visibility: 'secret',
+      rolls: [{ kind: 'hit', formula: '1d20+5' }, { kind: 'damage', formula: '1d4+3' }]
+    }));
+    const secretActGm = await masterWs.waitFor((m) => m.type === 'event' && m.item?.payload?.source === 'Секретный кинжал');
+    assert.equal(secretActGm.item.isPrivate, true);
+    assert.ok(Number.isInteger(secretActGm.item.payload.rolls[0].total), 'мастеру результат секретной атаки нужен');
+    const secretActMine = await playerWs.waitFor((m) => m.type === 'event' && m.item?.payload?.source === 'Секретный кинжал');
+    assert.equal(secretActMine.item.payload.hidden, true);
+    assert.equal(secretActMine.item.payload.rolls.length, 2);
+    for (const r of secretActMine.item.payload.rolls) {
+      assert.equal(r.total, undefined, 'игрок не должен видеть результат секретной атаки');
+      assert.equal(r.detail, undefined);
+      assert.equal(r.hidden, true);
+    }
+    assert.equal(secretActMine.item.payload.rolls[1].formula, '1d4+3');
+    const actHistory = await api('GET', `/api/tabletop/games/${gameId}/events`, undefined, player.token);
+    const actRow = actHistory.json.items.find((e) => e.payload?.source === 'Секретный кинжал');
+    assert.ok(actRow && actRow.payload.rolls.every((r) => r.total === undefined));
 
     // 3б. Сообщение чата: приходит всем с именем автора, переводы строк сохраняются,
     // пустое отклоняется, длинное обрезается до 1000 знаков.
