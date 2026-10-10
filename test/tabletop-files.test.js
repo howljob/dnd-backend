@@ -196,4 +196,43 @@ test('библиотека стола: виды файлов, права, муз
   assert.equal(scene.publishedState.music.playing, false);
   const emptyList = await api('GET', `/api/tabletop/games/${gameId}/files`, undefined, master.token);
   assert.equal(emptyList.json.items.length, 0);
+
+  // Общая библиотека мастера: трек из другой его игры виден с scope=all (с названием игры),
+  // в обычном списке — нет; играть его можно, удалить из этой игры — нельзя.
+  const otherGame = await api('POST', '/api/games', {
+    title: `Files other ${Date.now()}`,
+    description: 'Другая игра мастера',
+    gameTypeId: types.json.items[0].id,
+    startsAt: new Date(Date.now() + 24 * 3600e3).toISOString(),
+    maxPlayers: 4,
+    language: 'ru',
+    playerLevel: 'beginner',
+    isPaid: false,
+    priceAmount: null,
+    format: 'online',
+    location: null,
+    creatorRole: 'gm',
+    kind: 'one_shot',
+    tableProfile: { style: '', expectedDuration: '', newcomerThreshold: '', requirements: '' }
+  }, master.token);
+  const otherId = otherGame.json.game.id;
+  const otherAudio = await upload(otherId, master.token, 'audio', { name: 'таверна.mp3', mime: 'audio/mpeg', bytes: mp3 });
+  assert.equal(otherAudio.status, 201);
+  const own = await api('GET', `/api/tabletop/games/${gameId}/files`, undefined, master.token);
+  assert.equal(own.json.items.length, 0, 'без scope — только файлы этой игры');
+  const shared = await api('GET', `/api/tabletop/games/${gameId}/files?scope=all`, undefined, master.token);
+  const sharedTrack = shared.json.items.find((f) => f.url === otherAudio.json.url);
+  assert.ok(sharedTrack, 'трек из другой игры мастера не виден в общей библиотеке');
+  assert.equal(sharedTrack.fromThisGame, false);
+  assert.equal(sharedTrack.gameId, otherId);
+  assert.ok(sharedTrack.gameTitle.startsWith('Files other'));
+  const playShared = await api('PATCH', `/api/tabletop/games/${gameId}/scenes/${sceneId}`, {
+    target: 'published', patch: { music: { url: otherAudio.json.url, fileId: otherAudio.json.fileId, name: 'Таверна', playing: true } }
+  }, master.token);
+  assert.equal(playShared.json.scene.publishedState.music.url, otherAudio.json.url);
+  const delForeign = await api('DELETE', `/api/tabletop/games/${gameId}/files/${otherAudio.json.fileId}`, undefined, master.token);
+  assert.equal(delForeign.status, 404, 'файл другой игры удалять отсюда нельзя');
+  // Игрок общую библиотеку не видит.
+  const byPlayerShared = await api('GET', `/api/tabletop/games/${gameId}/files?scope=all`, undefined, player.token);
+  assert.equal(byPlayerShared.status, 403);
 });

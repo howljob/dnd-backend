@@ -209,7 +209,9 @@ function attachTabletopWs(httpServer) {
             detail: msg.detail,
             character: msg.character,
             spellLevel: msg.spellLevel,
-            rolls: msg.rolls
+            rolls: msg.rolls,
+            visibility: msg.visibility,
+            private: msg.private
           });
           broadcastEvent(client.gameId, event);
           return;

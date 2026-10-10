@@ -65,7 +65,10 @@ function stateFromTemplate(templateRow) {
     hpMax,
     tempHp: clampInt(combat.tempHp, 0, 999, 0),
     level: clampInt(templateRow.level, 1, 20, 1),
-    inventory: Array.isArray(sheet?.equipment) ? sheet.equipment.slice(0, 30) : [],
+    // Копия на столе хранит названия предметов (снаряжение листа — { name, qty, weight }).
+    inventory: Array.isArray(sheet?.equipment)
+      ? sheet.equipment.map((e) => (typeof e === 'string' ? e : String(e?.name || ''))).filter(Boolean).slice(0, 30)
+      : [],
     notes: cappedText(notes, 4000)
   };
 }
@@ -292,7 +295,14 @@ async function syncMyGameCharacterToTemplate(auth, gameId) {
       hpMax: clampInt(state.hpMax, 1, 999, sheet?.combat?.hpMax ?? 10),
       tempHp: clampInt(state.tempHp, 0, 999, 0)
     },
-    equipment: Array.isArray(state.inventory) ? state.inventory.slice(0, 30) : (sheet?.equipment || [])
+    // Названия из копии; количество и вес берутся у того же предмета в шаблоне, если он там есть.
+    equipment: Array.isArray(state.inventory)
+      ? state.inventory.slice(0, 30).map((name) => {
+        const prev = (Array.isArray(sheet?.equipment) ? sheet.equipment : [])
+          .find((e) => e && typeof e === 'object' && String(e.name || '').toLowerCase() === String(name || '').toLowerCase());
+        return prev ? { ...prev, name } : name;
+      })
+      : (sheet?.equipment || [])
   };
   const nextNotes = 'notes' in state ? cappedText(state.notes, 4000) : notes;
 

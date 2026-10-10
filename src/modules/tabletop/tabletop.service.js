@@ -963,20 +963,32 @@ function mapFileRow(row) {
   };
 }
 
-/** Библиотека файлов игры — мастеру. */
-async function listGameFiles(auth, gameId) {
+/**
+ * Библиотека файлов — мастеру. scope = 'all': файлы этой игры и всё, что этот мастер загружал
+ * в других своих играх (общая библиотека: музыка, карты, картинки токенов). У каждого файла —
+ * игра, откуда он; удалять можно только файлы этой игры (deleteGameFile).
+ */
+async function listGameFiles(auth, gameId, options = {}) {
   const { isGm } = await getMyMembership(auth, gameId);
   if (!isGm) {
     throw createHttpError(403, 'Only GM can see the game library');
   }
+  const all = options.scope === 'all';
   const result = await pool.query(
-    `SELECT id, kind, url, original_name, mime, size_bytes, width, height, created_at
-     FROM tabletop_files
-     WHERE game_id = $1
-     ORDER BY created_at DESC`,
-    [gameId]
+    `SELECT f.id, f.kind, f.url, f.original_name, f.mime, f.size_bytes, f.width, f.height, f.created_at,
+            f.game_id, g.title AS game_title
+     FROM tabletop_files f
+     INNER JOIN games g ON g.id = f.game_id
+     WHERE f.game_id = $1 ${all ? 'OR f.uploaded_by = $2' : ''}
+     ORDER BY (f.game_id = $1) DESC, f.created_at DESC`,
+    all ? [gameId, auth.userId] : [gameId]
   );
-  return result.rows.map(mapFileRow);
+  return result.rows.map((row) => ({
+    ...mapFileRow(row),
+    gameId: row.game_id,
+    gameTitle: row.game_title,
+    fromThisGame: row.game_id === gameId
+  }));
 }
 
 /** Убирает ссылки на удалённый файл из состояния сцены: карта, картинки токенов, музыка. */
@@ -1304,7 +1316,20 @@ function normalizeRollVisibility(payload) {
  */
 function eventForViewer(event, viewer) {
   if (!event || viewer?.isGm) return event;
-  if (event.type !== 'roll' || event.payload?.visibility !== 'secret') return event;
+  if (event.payload?.visibility !== 'secret') return event;
+  // Секретное действие (атака / заклинание): что сделали — видно, результаты бросков — нет.
+  if (event.type === 'action') {
+    const p = event.payload || {};
+    return {
+      ...event,
+      payload: {
+        ...p,
+        rolls: (Array.isArray(p.rolls) ? p.rolls : []).map((r) => ({ kind: r.kind, formula: r.formula, mode: r.mode || null, hidden: true })),
+        hidden: true
+      }
+    };
+  }
+  if (event.type !== 'roll') return event;
   const p = event.payload || {};
   return {
     ...event,
@@ -1438,6 +1463,8 @@ async function createActionEvent(auth, gameId, data) {
     });
   }
 
+  // Видимость, как у обычного броска: всем, мастеру (и бросавшему) или секретно (только мастеру).
+  const visibility = normalizeRollVisibility(payload);
   const actorName = await getUserDisplayName(auth.userId);
   return insertTableEvent({
     gameId,
@@ -1451,9 +1478,10 @@ async function createActionEvent(auth, gameId, data) {
       detail: detail || null,
       character: character || null,
       spellLevel,
-      rolls
+      rolls,
+      visibility
     },
-    isPrivate: false
+    isPrivate: visibility !== 'all'
   });
 }
 

@@ -1,5 +1,14 @@
 # DND Backend Handoff
 
+## 2026-10-10 — Общая библиотека, секретные действия, умения и снаряжение (ветка fix/library-sheet)
+
+- `GET /api/tabletop/games/:gameId/files?scope=all` — мастеру: файлы этой игры и всё, что он загружал в других своих играх (`uploaded_by`), с `gameId`, `gameTitle`, `fromThisGame`. Удаление по-прежнему только файлов этой игры (чужой — 404). Без `scope` — как раньше.
+- Действие (`action`, WS): принимает `visibility` (`all|gm|secret`, `private`), `isPrivate` — не `all`; `eventForViewer` у секретного действия для не-мастера убирает `total/detail/attempts` у каждого броска (`hidden: true`) — в рассылке и истории.
+- Лист: `equipment[]` — `{ name, qty 1–9999, weight фунты|null }` (строки → количество 1, до 60); `features[]` — `{ name, source, roll, description, collapsed }` (до 60, не массив → 400); избранное вида `feature`. Копия на столе (`game-characters`) хранит названия, при синхронизации в шаблон количество и вес берутся у того же предмета.
+- Тесты: `tabletop-events` (секретное действие), `character-sheet` (снаряжение, умения), `tabletop-files` (общая библиотека). `npm test` — 26/26. Миграций нет.
+
+---
+
 ## 2026-10-10 — Лист игрока у мастера, избранное, время привязки (ветка fix/character-tab)
 
 - `PUT /api/tabletop/games/:gameId/characters/:characterId/sheet` (`updateGameCharacterSheet`): мастер игры (или владелец) сохраняет лист персонажа, приведённого за этот стол; сохраняется шаблон игрока (`user_characters`), портрет не меняется. Общий путь сохранения — `profileService.updateCharacterRow(row, data)` (его же зовёт `updateCharacter` владельца). Другой игрок и мастер чужой игры — 403, персонаж не за этим столом — 404.

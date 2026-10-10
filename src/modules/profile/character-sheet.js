@@ -89,7 +89,7 @@ function normalizeWeaponOverrides(raw) {
  * Избранные броски (звёздочка в листе → вкладка «Персонаж» на столе): { type, key }.
  * type — что бросаем; key — характеристика, навык или название оружия/атаки/заклинания.
  */
-const FAVORITE_TYPES = new Set(['check', 'save', 'skill', 'initiative', 'hitdie', 'spellattack', 'weapon', 'attack', 'spell']);
+const FAVORITE_TYPES = new Set(['check', 'save', 'skill', 'initiative', 'hitdie', 'spellattack', 'weapon', 'attack', 'spell', 'feature']);
 const FAVORITES_MAX = 40;
 
 function normalizeFavorites(raw) {
@@ -286,10 +286,41 @@ function normalizeSheet(rawSheet, level, options = {}) {
     symbol: cappedText(alliesSource.symbol, 40)
   };
 
+  // Снаряжение: { name, qty, weight } — количество 1–9999, вес в фунтах (до сотых) или null.
+  // Старые записи — строки с названием: становятся предметом с количеством 1.
   const equipment = (Array.isArray(source.equipment) ? source.equipment : [])
-    .map((item) => cappedText(item, 300))
-    .filter(Boolean)
-    .slice(0, 30);
+    .map((item) => {
+      if (typeof item === 'string') return { name: cappedText(item, 300), qty: 1, weight: null };
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+      const weight = Number(String(item.weight ?? '').replace(',', '.'));
+      return {
+        name: cappedText(item.name, 300),
+        qty: clampInt(item.qty, 1, 9999, 1),
+        weight: item.weight === '' || item.weight === null || item.weight === undefined || !Number.isFinite(weight)
+          ? null
+          : Math.round(Math.min(100000, Math.max(0, weight)) * 100) / 100
+      };
+    })
+    .filter((item) => item && item.name)
+    .slice(0, 60);
+
+  // Умения и способности: название, источник, бросок (формула), описание, свёрнуто ли.
+  if (typeof source.features !== 'undefined' && !Array.isArray(source.features)) {
+    throw createHttpError(400, 'Sheet features must be an array');
+  }
+  const features = (Array.isArray(source.features) ? source.features : [])
+    .map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+      return {
+        name: cappedText(item.name, 160),
+        source: cappedText(item.source, 120),
+        roll: cappedText(item.roll, 80),
+        description: cappedText(item.description, 4000),
+        collapsed: Boolean(item.collapsed)
+      };
+    })
+    .filter((item) => item && (item.name || item.description || item.roll))
+    .slice(0, 60);
 
   const personalitySource = source.personality && typeof source.personality === 'object' && !Array.isArray(source.personality)
     ? source.personality
@@ -322,6 +353,7 @@ function normalizeSheet(rawSheet, level, options = {}) {
     // Первая страница официального листа: владения и языки, умения и способности, атаки, кошелёк.
     proficienciesLanguages: cappedText(source.proficienciesLanguages, 2000),
     featuresTraits: cappedText(source.featuresTraits, 4000),
+    features,
     attacks,
     money,
     // Вторая страница.
