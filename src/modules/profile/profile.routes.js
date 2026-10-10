@@ -7,11 +7,32 @@ const profileController = require('./profile.controller');
 const { requireAuth } = require('../../middleware/auth.middleware');
 const { requireConfirmedEmail } = require('../../middleware/confirmed-email.middleware');
 const { MAX_PORTRAIT_BYTES } = require('./portrait-storage');
+const { MAX_PDF_BYTES } = require('./roll20-import.service');
 
 const portraitUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_PORTRAIT_BYTES }
 });
+
+// Перенос из Roll20: PDF листа разбирается в памяти и нигде не сохраняется.
+const roll20PdfUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_PDF_BYTES, files: 1 }
+});
+
+function handleRoll20Upload(req, res, next) {
+  roll20PdfUpload.single('file')(req, res, (error) => {
+    if (!error) return next();
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ ok: false, code: 'FILE_TOO_LARGE', message: 'PDF file is too large (max 10 MB)' });
+    }
+    if (error instanceof multer.MulterError) {
+      return res.status(400).json({ ok: false, code: 'PDF_REQUIRED', message: error.message });
+    }
+    console.error('[profile] roll20 upload failed:', error);
+    return res.status(500).json({ ok: false, message: 'Internal server error' });
+  });
+}
 
 const profileRouter = express.Router();
 
@@ -73,6 +94,7 @@ profileRouter.get('/games', requireAuth, profileController.getPersonalGames);
 profileRouter.get('/activity', requireAuth, profileController.getGameActivity);
 profileRouter.get('/characters', requireAuth, profileController.listCharacters);
 profileRouter.post('/characters', requireAuth, profileController.createCharacter);
+profileRouter.post('/characters/import/roll20', requireAuth, handleRoll20Upload, profileController.importRoll20Character);
 profileRouter.patch('/characters/:id', requireAuth, profileController.updateCharacter);
 profileRouter.delete('/characters/:id', requireAuth, profileController.deleteCharacter);
 profileRouter.post(
