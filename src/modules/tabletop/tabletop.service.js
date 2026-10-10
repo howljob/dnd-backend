@@ -298,6 +298,13 @@ function sanitizeToken(token) {
   }
   // Закреплён на карте: часть карты, никто не двигает (снять может только мастер).
   if ('locked' in out) out.locked = Boolean(out.locked);
+  // Поворот картинки токена в градусах, 0–359 (360 и больше — по кругу, отрицательные — тоже).
+  if ('rotation' in out) {
+    const deg = Number(out.rotation);
+    out.rotation = Number.isFinite(deg) ? ((Math.round(deg) % 360) + 360) % 360 : 0;
+  }
+  // Подпись с именем под токеном: по умолчанию скрыта, мастер включает галочкой.
+  if ('showName' in out) out.showName = out.showName === true || out.showName === 'true';
   return out;
 }
 
@@ -733,14 +740,15 @@ async function patchSceneState(auth, gameId, sceneId, body) {
       if (!raw || !raw.id) continue;
       const ex = byId.get(raw.id);
       if (!ex || ex.ownerUserId !== auth.userId) continue;
-      // Владелец токена: положение, размер, хиты и состояния. Заметки мастера,
-      // владелец, скрытость, подпись и закрепление — только мастер.
+      // Владелец токена: положение, размер, поворот, хиты и состояния. Заметки мастера,
+      // владелец, скрытость, подпись, показ имени и закрепление — только мастер.
       // Закреплённый токен — часть карты: игрок его не двигает и не меняет размер.
       const t = sanitizeToken(raw);
       if (!ex.locked) {
         if (typeof t.x === 'number') ex.x = t.x;
         if (typeof t.y === 'number') ex.y = t.y;
         if (typeof t.size === 'number') ex.size = t.size;
+        if (typeof t.rotation === 'number') ex.rotation = t.rotation;
       }
       for (const key of TOKEN_HP_FIELDS) {
         if (key in t) ex[key] = t[key];

@@ -151,6 +151,19 @@ test('токен: картинка — из библиотеки или порт
   assert.equal(sanitizeToken({ id: 'a', locked: 0 }).locked, false);
 });
 
+test('токен: поворот — целые градусы 0–359 по кругу, показ имени — булево', () => {
+  assert.equal(sanitizeToken({ id: 'a', rotation: 90.4 }).rotation, 90);
+  assert.equal(sanitizeToken({ id: 'a', rotation: 360 }).rotation, 0);
+  assert.equal(sanitizeToken({ id: 'a', rotation: 725 }).rotation, 5);
+  assert.equal(sanitizeToken({ id: 'a', rotation: -90 }).rotation, 270);
+  assert.equal(sanitizeToken({ id: 'a', rotation: 'abc' }).rotation, 0);
+  assert.ok(!('rotation' in sanitizeToken({ id: 'a' })));
+  assert.equal(sanitizeToken({ id: 'a', showName: true }).showName, true);
+  assert.equal(sanitizeToken({ id: 'a', showName: 'yes' }).showName, false);
+  assert.equal(sanitizeToken({ id: 'a', showName: 1 }).showName, false);
+  assert.ok(!('showName' in sanitizeToken({ id: 'a' })));
+});
+
 test('сцена: остальные поля патча сливаются как раньше', () => {
   const next = mergeScenePatch(base(), { tokens: [{ id: 'a', x: 5, y: 5, size: 48 }], grid: { enabled: true } });
   assert.equal(next.grid.enabled, true);
