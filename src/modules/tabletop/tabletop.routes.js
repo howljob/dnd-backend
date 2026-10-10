@@ -93,6 +93,12 @@ tabletopRouter.get(
   requireAuth,
   tabletopController.getGameCharacterSheet
 );
+// Мастер игры сохраняет лист персонажа игрока (вкладка «Персонаж» на столе).
+tabletopRouter.put(
+  '/tabletop/games/:gameId/characters/:characterId/sheet',
+  requireAuth,
+  tabletopController.updateGameCharacterSheet
+);
 tabletopRouter.get(
   '/tabletop/games/:gameId/events',
   requireAuth,

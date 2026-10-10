@@ -244,6 +244,23 @@ async function addGameCharacter(req, res) {
   }
 }
 
+async function updateGameCharacterSheet(req, res) {
+  try {
+    const item = await tabletopService.updateGameCharacterSheet(
+      req.auth,
+      req.params.gameId,
+      req.params.characterId,
+      req.body
+    );
+    return res.status(200).json({
+      ok: true,
+      item
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
 async function removeGameCharacter(req, res) {
   try {
     const result = await tabletopService.removeGameCharacter(
@@ -275,6 +292,7 @@ module.exports = {
   listGameFiles,
   deleteGameFile,
   getGameCharacterSheet,
+  updateGameCharacterSheet,
   listGameCharacters,
   addGameCharacter,
   removeGameCharacter

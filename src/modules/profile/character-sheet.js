@@ -85,6 +85,40 @@ function normalizeWeaponOverrides(raw) {
   return result;
 }
 
+/**
+ * Избранные броски (звёздочка в листе → вкладка «Персонаж» на столе): { type, key }.
+ * type — что бросаем; key — характеристика, навык или название оружия/атаки/заклинания.
+ */
+const FAVORITE_TYPES = new Set(['check', 'save', 'skill', 'initiative', 'hitdie', 'spellattack', 'weapon', 'attack', 'spell']);
+const FAVORITES_MAX = 40;
+
+function normalizeFavorites(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const type = String(item.type || '');
+    if (!FAVORITE_TYPES.has(type)) continue;
+    let key = cappedText(item.key, 160);
+    if (type === 'check' || type === 'save') {
+      if (!ABILITY_KEYS.includes(key)) continue;
+    } else if (type === 'skill') {
+      if (!SKILL_IDS.includes(key)) continue;
+    } else if (['initiative', 'hitdie', 'spellattack'].includes(type)) {
+      key = '';
+    } else if (!key) {
+      continue;
+    }
+    const id = `${type}:${key.toLowerCase()}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({ type, key });
+    if (out.length >= FAVORITES_MAX) break;
+  }
+  return out;
+}
+
 function normalizeSheet(rawSheet, level, options = {}) {
   const source = rawSheet && typeof rawSheet === 'object' && !Array.isArray(rawSheet) ? rawSheet : {};
 
@@ -297,7 +331,8 @@ function normalizeSheet(rawSheet, level, options = {}) {
     treasure: cappedText(source.treasure, 4000),
     // Третья страница.
     spellcasting,
-    spellSlots
+    spellSlots,
+    favorites: normalizeFavorites(source.favorites)
   };
 
   // Легаси-портрет сохраняется только сервером (из БД), с клиента — никогда.

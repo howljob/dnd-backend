@@ -1,5 +1,14 @@
 # DND Backend Handoff
 
+## 2026-10-10 — Лист игрока у мастера, избранное, время привязки (ветка fix/character-tab)
+
+- `PUT /api/tabletop/games/:gameId/characters/:characterId/sheet` (`updateGameCharacterSheet`): мастер игры (или владелец) сохраняет лист персонажа, приведённого за этот стол; сохраняется шаблон игрока (`user_characters`), портрет не меняется. Общий путь сохранения — `profileService.updateCharacterRow(row, data)` (его же зовёт `updateCharacter` владельца). Другой игрок и мастер чужой игры — 403, персонаж не за этим столом — 404.
+- `listGameCharacters` отдаёт `linkedAt` (`game_characters.created_at`) — вкладка «Персонаж» показывает игроку последнего приведённого.
+- Лист: `favorites` — до 40 записей `{ type, key }` (`check|save` + характеристика, `skill` + id навыка, `initiative|hitdie|spellattack` без ключа, `weapon|attack|spell` + название), без повторов (`normalizeFavorites` в character-sheet.js).
+- Тесты: `test/tabletop-character-sheet.test.js` (права, замена персонажа), `test/character-sheet.test.js` (избранное). `npm test` — 25/25. Миграций нет.
+
+---
+
 ## 2026-10-10 — Токены: поворот и показ имени (ветка fix/tokens-3)
 
 - `sanitizeToken`: `rotation` — целые градусы 0–359 по кругу (725 → 5, −90 → 270, мусор → 0), `showName` — только `true` даёт показ имени. Игрок-владелец может менять `rotation` своего токена (как x/y/size, кроме закреплённого); `showName` — только мастер. Миграций нет.
