@@ -1,5 +1,12 @@
 # DND Backend Handoff
 
+## 2026-10-09 — Лист персонажа: поля трёх страниц официального листа (ветка fix/character-sheet2)
+
+- `normalizeSheet` (`src/modules/profile/character-sheet.js`) принимает и зажимает новые поля, миграций нет (jsonb `user_characters.sheet`): `combat.hitDiceUsed` (0–20), `combat.deathSaves {successes, failures}` (0–3); `proficienciesLanguages` (2000), `featuresTraits` (4000); `attacks[]` ({name, bonus, damage}, до 20, пустые строки отбрасываются, не массив → 400); `money {cp, sp, ep, gp, pp}`; `appearance {age, height, weight, eyes, skin, hair}` (по 60); `allies {text, orgName, symbol}`; `additionalFeatures`, `treasure` (4000); `spellcasting {className, ability ∈ int|wis|cha|''}`; `spellSlots {1..9: {total, used}}` (0–20, всегда все девять кругов); у заклинаний `level` 0–9 (нет — разбор из `type`: «заговор» → 0, первая цифра → круг) и `prepared`, лимит 120 записей.
+- Тест: `test/character-sheet.test.js`. `npm test` — 22/22.
+
+---
+
 ## 2026-10-08 — Видимость бросков: все / мастер / секрет (ветка fix/dice-menu)
 
 - Кадр `rollDice` принимает `visibility`: `all` (всем), `gm` (мастеру и бросавшему; старое `private: true` = `gm`, теперь доступно и игрокам), `secret` (только мастеру). В `payload` события пишется `visibility`; `is_private` = не `all`.

@@ -21,6 +21,60 @@ test('лист: свои формулы оружия сохраняются и �
   });
 });
 
+test('лист: поля трёх страниц официального листа сохраняются и зажимаются в пределах', () => {
+  const sheet = normalizeSheet({
+    combat: { hpMax: 30, hitDiceUsed: 99, deathSaves: { successes: 5, failures: -1 } },
+    proficienciesLanguages: '  Общий, эльфийский  ',
+    featuresTraits: 'Второе дыхание',
+    attacks: [
+      { name: 'Длинный меч', bonus: '+5', damage: '1d8+3 рубящий' },
+      { name: '', bonus: '', damage: '' },
+      'мусор'
+    ],
+    money: { gp: 15, cp: -3, pp: 'x' },
+    appearance: { age: '27', eyes: 'зелёные', hair: 'рыжие', skin: '', height: '180', weight: '70' },
+    allies: { text: 'Арфисты', orgName: 'Арфисты', symbol: 'арфа' },
+    additionalFeatures: 'Тёмное зрение',
+    treasure: 'Кольцо',
+    spellcasting: { className: 'Волшебник', ability: 'INT' },
+    spellSlots: { 1: { total: 4, used: 2 }, 3: { total: 2, used: 30 }, 12: { total: 1 } },
+    spells: [
+      { name: 'Огненный шар', level: 3, prepared: true },
+      { name: 'Волшебная рука', type: 'заговор, вызов' },
+      { name: 'Щит', type: '1 уровень, ограждение', prepared: 'yes' },
+      'Свет'
+    ]
+  }, 5);
+  assert.equal(sheet.combat.hitDiceUsed, 20);
+  assert.deepEqual(sheet.combat.deathSaves, { successes: 3, failures: 0 });
+  assert.equal(sheet.proficienciesLanguages, 'Общий, эльфийский');
+  assert.equal(sheet.featuresTraits, 'Второе дыхание');
+  assert.deepEqual(sheet.attacks, [{ name: 'Длинный меч', bonus: '+5', damage: '1d8+3 рубящий' }]);
+  assert.deepEqual(sheet.money, { cp: 0, sp: 0, ep: 0, gp: 15, pp: 0 });
+  assert.equal(sheet.appearance.eyes, 'зелёные');
+  assert.equal(sheet.appearance.skin, '');
+  assert.deepEqual(sheet.allies, { text: 'Арфисты', orgName: 'Арфисты', symbol: 'арфа' });
+  assert.equal(sheet.additionalFeatures, 'Тёмное зрение');
+  assert.equal(sheet.treasure, 'Кольцо');
+  assert.deepEqual(sheet.spellcasting, { className: 'Волшебник', ability: 'int' });
+  assert.deepEqual(sheet.spellSlots[1], { total: 4, used: 2 });
+  assert.deepEqual(sheet.spellSlots[3], { total: 2, used: 20 });
+  assert.deepEqual(sheet.spellSlots[9], { total: 0, used: 0 });
+  assert.equal(Object.keys(sheet.spellSlots).length, 9);
+  assert.deepEqual(sheet.spells.map((s) => [s.name, s.level, s.prepared]), [
+    ['Огненный шар', 3, true],
+    ['Волшебная рука', 0, false],
+    ['Щит', 1, true],
+    ['Свет', 0, false]
+  ]);
+  // Пустой лист получает все поля с значениями по умолчанию — фронт на них рассчитывает.
+  const empty = normalizeSheet({}, 1);
+  assert.deepEqual(empty.attacks, []);
+  assert.equal(empty.spellcasting.ability, '');
+  assert.deepEqual(empty.combat.deathSaves, { successes: 0, failures: 0 });
+  assert.throws(() => normalizeSheet({ attacks: 'нет' }, 1), (e) => e.statusCode === 400);
+});
+
 test('лист: без своих формул — пустой объект; массив вместо объекта — ошибка 400', () => {
   assert.deepEqual(normalizeSheet({}, 1).weaponOverrides, {});
   assert.throws(() => normalizeSheet({ weaponOverrides: [1, 2] }, 1), (e) => e.statusCode === 400);
