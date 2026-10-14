@@ -1,5 +1,12 @@
 # DND Backend Handoff
 
+## 2026-10-15 — Лист: использования, свои Сл спасброска и бонус атаки (ветка fix/sheet-uses)
+
+- `normalizeSheet`: `uses[]` — до 30 записей `{ name ≤ 80, total 0–99, used ≤ total, reset ∈ short|long|none (иначе long) }`, не массив → 400; `spellcasting.saveDc` (null или 1–40) и `spellcasting.attackBonus` (null или −10…30) — null означает «считается сам»; `attacks[].damageType` ≤ 40 (всегда присутствует, пусто — ''). Миграций нет. `npm test` — 30/30.
+- Прод: `JWT_ACCESS_EXPIRES_IN=365d` в `.env` (2026-10-15, было 7d; копия до правки `/root/dnd-backend.env.bak-20261015`).
+
+---
+
 ## 2026-10-15 — Лист: варианты КД/скорости, мультикласс костей хитов, тип урона (ветка fix/sheet-fields)
 
 - `normalizeSheet` (`character-sheet.js`): `combat.acVariants` и `combat.speedVariants` — до 6 записей `{ label ≤ 40, value }` (0–99 / 0–120, `normalizeVariants`); `combat.hitDiceTotal` 0–20 (0 — равно уровню); `combat.hitDiceExtra` — до 3 строк `{ die ∈ 1d4…1d20, total 0–20, used ≤ total }` (`normalizeHitDiceExtra`); `attacks[].damageType` ≤ 40; `weaponOverrides[name].damageType` ≤ 40 (запись хранится и без формул, если есть тип).

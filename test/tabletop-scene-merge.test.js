@@ -143,7 +143,8 @@ test('токен: картинка — из библиотеки или порт
   assert.equal(bad.imageUrl, null);
   const traversal = sanitizeToken({ id: 'a', imageUrl: '/uploads/portraits/../../.env' });
   assert.equal(traversal.imageUrl, null);
-  assert.equal(sanitizeToken({ id: 'a', size: 5 }).size, 16);
+  assert.equal(sanitizeToken({ id: 'a', size: 5 }).size, 5);
+  assert.equal(sanitizeToken({ id: 'a', size: 1 }).size, 4);
   assert.equal(sanitizeToken({ id: 'a', size: 99999 }).size, 1600);
   assert.equal(sanitizeToken({ id: 'a', size: 'abc' }).size, 48);
   assert.equal(sanitizeToken({ id: 'a', size: 140.4 }).size, 140);

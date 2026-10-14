@@ -15,7 +15,9 @@ const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
 const UPLOAD_FILE_RE = /^\/uploads\/vtt\/[a-f0-9]{32}\.(png|jpg|webp|gif|mp3|ogg|wav)$/i;
 // Портрет персонажа (uploads/portraits) тоже годится картинкой токена.
 const PORTRAIT_URL_RE = /^\/uploads\/portraits\/[A-Za-z0-9_.-]+\.(png|jpe?g|webp|gif)$/i;
-const TOKEN_SIZE_MIN = 16;
+// Минимум 4 px: на картах с мелкой клеткой полклетки — это 8–10 px, прежний порог 16 px
+// откатывал такой размер к 0,75 клетки.
+const TOKEN_SIZE_MIN = 4;
 const TOKEN_SIZE_MAX = 1600;
 
 /** Виды файлов библиотеки стола: карта, картинка токена, музыка. */
@@ -1609,5 +1611,6 @@ module.exports = {
   createActionEvent,
   createChatEvent,
   createPresenceEvent,
-  listTableEvents
+  listTableEvents,
+  getUserDisplayName
 };
