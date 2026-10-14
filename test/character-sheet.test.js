@@ -137,6 +137,40 @@ test('лист: снаряжение — количество и вес, ста�
   assert.throws(() => normalizeSheet({ features: 'текст' }, 1), (e) => e.statusCode === 400);
 });
 
+test('лист: варианты КД и скорости, мультикласс костей хитов, тип урона оружия', () => {
+  const sheet = normalizeSheet({
+    combat: {
+      armorClass: 13,
+      acVariants: [
+        { label: 'Доспех мага', value: '16' },
+        { label: '', value: 150 },
+        { label: 'мусор', value: 'x' },
+        'строка'
+      ],
+      speedVariants: [{ label: 'Лазание', value: 20 }, { label: 'Полёт', value: 60 }],
+      hitDiceTotal: 4,
+      hitDiceExtra: [
+        { die: '1К8', total: 2, used: 5 },
+        { die: '1d7', total: 1, used: 0 },
+        { die: '1d6', total: 30, used: -1 }
+      ]
+    },
+    weaponOverrides: {
+      'Меч Света': { damageType: 'излучение' },
+      'Кинжал': { damage: '1d4+2', damageType: '' }
+    }
+  }, 6);
+  assert.deepEqual(sheet.combat.acVariants, [{ label: 'Доспех мага', value: 16 }, { label: '', value: 99 }]);
+  assert.deepEqual(sheet.combat.speedVariants, [{ label: 'Лазание', value: 20 }, { label: 'Полёт', value: 60 }]);
+  assert.equal(sheet.combat.hitDiceTotal, 4);
+  assert.deepEqual(sheet.combat.hitDiceExtra, [{ die: '1d8', total: 2, used: 2 }, { die: '1d6', total: 20, used: 0 }]);
+  assert.deepEqual(sheet.weaponOverrides, { 'Меч Света': { damageType: 'излучение' }, 'Кинжал': { damage: '1d4+2' } });
+  const empty = normalizeSheet({}, 1);
+  assert.deepEqual(empty.combat.acVariants, []);
+  assert.deepEqual(empty.combat.hitDiceExtra, []);
+  assert.equal(empty.combat.hitDiceTotal, 0);
+});
+
 test('лист: без своих формул — пустой объект; массив вместо объекта — ошибка 400', () => {
   assert.deepEqual(normalizeSheet({}, 1).weaponOverrides, {});
   assert.throws(() => normalizeSheet({ weaponOverrides: [1, 2] }, 1), (e) => e.statusCode === 400);

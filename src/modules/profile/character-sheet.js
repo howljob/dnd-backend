@@ -64,8 +64,8 @@ function normalizeDiceFormula(value) {
 }
 
 /**
- * Свои формулы оружия: объект «название → { hit, damage }», до 30 записей;
- * пустые и некорректные формулы отбрасываются, запись без формул не хранится.
+ * Свои формулы оружия: объект «название → { hit, damage, damageType }», до 30 записей;
+ * пустые и некорректные формулы отбрасываются, запись без формул и типа урона не хранится.
  */
 function normalizeWeaponOverrides(raw) {
   if (raw === null || typeof raw === 'undefined') return {};
@@ -78,11 +78,50 @@ function normalizeWeaponOverrides(raw) {
     if (!name || !value || typeof value !== 'object' || Array.isArray(value)) continue;
     const hit = normalizeDiceFormula(value.hit);
     const damage = normalizeDiceFormula(value.damage);
-    if (!hit && !damage) continue;
-    result[name] = { ...(hit ? { hit } : {}), ...(damage ? { damage } : {}) };
+    const damageType = cappedText(value.damageType, 40);
+    if (!hit && !damage && !damageType) continue;
+    result[name] = { ...(hit ? { hit } : {}), ...(damage ? { damage } : {}), ...(damageType ? { damageType } : {}) };
     if (Object.keys(result).length >= 30) break;
   }
   return result;
+}
+
+/**
+ * Варианты КД или скорости под щитом листа («16 — Доспех мага», «20 — лазание»):
+ * до 6 записей { label, value }, значение в пределах щита.
+ */
+function normalizeVariants(raw, max) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+      const label = cappedText(item.label, 40);
+      const value = Number(item.value);
+      if (!Number.isFinite(value)) return null;
+      return { label, value: Math.max(0, Math.min(max, Math.round(value))) };
+    })
+    .filter((item) => item && (item.label || item.value))
+    .slice(0, 6);
+}
+
+const HIT_DIE_RE = /^1d(4|6|8|10|12|20)$/;
+
+/**
+ * Дополнительные кости хитов (мультикласс): до 3 строк { die, total, used };
+ * кость — одна из 1d4…1d20, «всего» и «потрачено» 0–20.
+ */
+function normalizeHitDiceExtra(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+      const die = String(item.die || '').trim().toLowerCase().replace(/к/g, 'd');
+      if (!HIT_DIE_RE.test(die)) return null;
+      const total = clampInt(item.total, 0, 20, 0);
+      return { die, total, used: clampInt(item.used, 0, total, 0) };
+    })
+    .filter(Boolean)
+    .slice(0, 3);
 }
 
 /**
@@ -178,6 +217,12 @@ function normalizeSheet(rawSheet, level, options = {}) {
     hitDice: cappedText(combatSource.hitDice || '1d10', 50),
     // Потраченные кости хитов (короткий отдых) и спасброски от смерти — игровые поля первой страницы листа.
     hitDiceUsed: clampInt(combatSource.hitDiceUsed, 0, 20, 0),
+    // Мультикласс: «всего» первой строки вписано руками (0 — равно уровню) и дополнительные строки костей.
+    hitDiceTotal: clampInt(combatSource.hitDiceTotal, 0, 20, 0),
+    hitDiceExtra: normalizeHitDiceExtra(combatSource.hitDiceExtra),
+    // Варианты КД и скорости под щитами (клик по варианту ставит его в щит).
+    acVariants: normalizeVariants(combatSource.acVariants, 99),
+    speedVariants: normalizeVariants(combatSource.speedVariants, 120),
     deathSaves: {
       successes: clampInt(deathSource.successes, 0, 3, 0),
       failures: clampInt(deathSource.failures, 0, 3, 0)
