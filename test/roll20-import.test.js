@@ -163,7 +163,7 @@ test('перенос из Roll20: PDF листа → черновик, ошиб�
 
   // Атаки: «Лёгкий арба…» дописано, остальные обрезанные — в отчёте.
   assert.equal(sheet.attacks.length, 6);
-  assert.deepEqual(sheet.attacks[1], { name: 'Короткий меч', bonus: '+8', damage: '1d6+4' });
+  assert.deepEqual(sheet.attacks[1], { name: 'Короткий меч', bonus: '+8', damage: '1d6+4', damageType: '' });
   assert.ok(codes.includes('attacksTruncated'));
 
   // Особенности: 15 названий, описания со страницы «Особенности и черты» без примеси соседних колонок.

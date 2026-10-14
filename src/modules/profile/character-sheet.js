@@ -279,10 +279,33 @@ function normalizeSheet(rawSheet, level, options = {}) {
     ? source.spellcasting
     : {};
   const castAbility = String(castingSource.ability || '').toLowerCase();
+  // Сл спасброска и бонус атаки заклинанием: null — считаются сами (8 + мастерство + модификатор),
+  // число — вписано руками (предметы и т. п.).
+  const optionalInt = (value, min, max) => {
+    if (value === null || value === undefined || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.round(n))) : null;
+  };
   const spellcasting = {
     className: cappedText(castingSource.className, 120),
-    ability: ['int', 'wis', 'cha'].includes(castAbility) ? castAbility : ''
+    ability: ['int', 'wis', 'cha'].includes(castAbility) ? castAbility : '',
+    saveDc: optionalInt(castingSource.saveDc, 1, 40),
+    attackBonus: optionalInt(castingSource.attackBonus, -10, 30)
   };
+
+  // Использования (как в Roll20): название, всего, потрачено, когда сбрасывается.
+  if (typeof source.uses !== 'undefined' && !Array.isArray(source.uses)) {
+    throw createHttpError(400, 'Sheet uses must be an array');
+  }
+  const uses = (Array.isArray(source.uses) ? source.uses : [])
+    .map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+      const total = clampInt(item.total, 0, 99, 0);
+      const reset = ['short', 'long', 'none'].includes(item.reset) ? item.reset : 'long';
+      return { name: cappedText(item.name, 80), total, used: clampInt(item.used, 0, total, 0), reset };
+    })
+    .filter((item) => item && (item.name || item.total))
+    .slice(0, 30);
   const slotsSource = source.spellSlots && typeof source.spellSlots === 'object' && !Array.isArray(source.spellSlots)
     ? source.spellSlots
     : {};
@@ -410,6 +433,7 @@ function normalizeSheet(rawSheet, level, options = {}) {
     // Третья страница.
     spellcasting,
     spellSlots,
+    uses,
     favorites: normalizeFavorites(source.favorites)
   };
 
