@@ -27,7 +27,7 @@ test('лист: поля трёх страниц официального лис
     proficienciesLanguages: '  Общий, эльфийский  ',
     featuresTraits: 'Второе дыхание',
     attacks: [
-      { name: 'Длинный меч', bonus: '+5', damage: '1d8+3 рубящий' },
+      { name: 'Длинный меч', bonus: '+5', damage: '1d8+3 рубящий', damageType: 'огонь' },
       { name: '', bonus: '', damage: '' },
       'мусор'
     ],
@@ -49,7 +49,7 @@ test('лист: поля трёх страниц официального лис
   assert.deepEqual(sheet.combat.deathSaves, { successes: 3, failures: 0 });
   assert.equal(sheet.proficienciesLanguages, 'Общий, эльфийский');
   assert.equal(sheet.featuresTraits, 'Второе дыхание');
-  assert.deepEqual(sheet.attacks, [{ name: 'Длинный меч', bonus: '+5', damage: '1d8+3 рубящий' }]);
+  assert.deepEqual(sheet.attacks, [{ name: 'Длинный меч', bonus: '+5', damage: '1d8+3 рубящий', damageType: 'огонь' }]);
   assert.deepEqual(sheet.money, { cp: 0, sp: 0, ep: 0, gp: 15, pp: 0 });
   assert.equal(sheet.appearance.eyes, 'зелёные');
   assert.equal(sheet.appearance.skin, '');

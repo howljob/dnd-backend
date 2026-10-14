@@ -303,7 +303,8 @@ function normalizeSheet(rawSheet, level, options = {}) {
       return {
         name: cappedText(item.name, 120),
         bonus: cappedText(item.bonus, 40),
-        damage: cappedText(item.damage, 80)
+        damage: cappedText(item.damage, 80),
+        damageType: cappedText(item.damageType, 40)
       };
     })
     .filter((item) => item && (item.name || item.bonus || item.damage))
