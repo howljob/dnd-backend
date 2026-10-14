@@ -56,7 +56,7 @@ test('лист: поля трёх страниц официального лис
   assert.deepEqual(sheet.allies, { text: 'Арфисты', orgName: 'Арфисты', symbol: 'арфа' });
   assert.equal(sheet.additionalFeatures, 'Тёмное зрение');
   assert.equal(sheet.treasure, 'Кольцо');
-  assert.deepEqual(sheet.spellcasting, { className: 'Волшебник', ability: 'int' });
+  assert.deepEqual(sheet.spellcasting, { className: 'Волшебник', ability: 'int', saveDc: null, attackBonus: null });
   assert.deepEqual(sheet.spellSlots[1], { total: 4, used: 2 });
   assert.deepEqual(sheet.spellSlots[3], { total: 2, used: 20 });
   assert.deepEqual(sheet.spellSlots[9], { total: 0, used: 0 });
@@ -169,6 +169,29 @@ test('лист: варианты КД и скорости, мультиклас�
   assert.deepEqual(empty.combat.acVariants, []);
   assert.deepEqual(empty.combat.hitDiceExtra, []);
   assert.equal(empty.combat.hitDiceTotal, 0);
+});
+
+test('лист: использования, свои Сл спасброска и бонус атаки заклинанием', () => {
+  const sheet = normalizeSheet({
+    spellcasting: { className: 'Колдун', ability: 'cha', saveDc: '16', attackBonus: 9 },
+    uses: [
+      { name: 'Всплеск действий', total: 1, used: 0, reset: 'short' },
+      { name: 'Талисман', total: '4', used: 9, reset: 'мусор' },
+      { name: '', total: 0 },
+      'строка'
+    ]
+  }, 5);
+  assert.equal(sheet.spellcasting.saveDc, 16);
+  assert.equal(sheet.spellcasting.attackBonus, 9);
+  assert.deepEqual(sheet.uses, [
+    { name: 'Всплеск действий', total: 1, used: 0, reset: 'short' },
+    { name: 'Талисман', total: 4, used: 4, reset: 'long' }
+  ]);
+  const empty = normalizeSheet({ spellcasting: { saveDc: '', attackBonus: null } }, 1);
+  assert.equal(empty.spellcasting.saveDc, null);
+  assert.equal(empty.spellcasting.attackBonus, null);
+  assert.deepEqual(empty.uses, []);
+  assert.throws(() => normalizeSheet({ uses: 'нет' }, 1), (e) => e.statusCode === 400);
 });
 
 test('лист: без своих формул — пустой объект; массив вместо объекта — ошибка 400', () => {

@@ -1,5 +1,12 @@
 # DND Backend Handoff
 
+## 2026-10-15 — Лист: варианты КД/скорости, мультикласс костей хитов, тип урона (ветка fix/sheet-fields)
+
+- `normalizeSheet` (`character-sheet.js`): `combat.acVariants` и `combat.speedVariants` — до 6 записей `{ label ≤ 40, value }` (0–99 / 0–120, `normalizeVariants`); `combat.hitDiceTotal` 0–20 (0 — равно уровню); `combat.hitDiceExtra` — до 3 строк `{ die ∈ 1d4…1d20, total 0–20, used ≤ total }` (`normalizeHitDiceExtra`); `attacks[].damageType` ≤ 40; `weaponOverrides[name].damageType` ≤ 40 (запись хранится и без формул, если есть тип).
+- Тест `test/character-sheet.test.js` расширен. `npm test` — 29/29. Миграций нет.
+
+---
+
 ## 2026-10-10 — Перенос персонажа из Roll20 по PDF (ветка fix/roll20-import)
 
 - `POST /api/profile/characters/import/roll20` (multipart, поле `file`, до 10 МБ, только вход): PDF листа «D&D 5E by Roll20», сохранённый из браузера («Печать → PDF»). Файл разбирается в памяти и не сохраняется; ответ `{ ok, character, report }` — черновик в формате API (лист прогнан через `normalizeSheet`) и список «проверьте» `[{ code, params }]`. Ошибки: 400 `NOT_PDF` / `FILE_TOO_LARGE` / `PDF_REQUIRED`, 422 `NOT_ROLL20_SHEET` / `PDF_UNREADABLE`.
