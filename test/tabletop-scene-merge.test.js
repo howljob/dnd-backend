@@ -163,6 +163,9 @@ test('токен: поворот — целые градусы 0–359 по кр
   assert.equal(sanitizeToken({ id: 'a', showName: 'yes' }).showName, false);
   assert.equal(sanitizeToken({ id: 'a', showName: 1 }).showName, false);
   assert.ok(!('showName' in sanitizeToken({ id: 'a' })));
+  assert.equal(sanitizeToken({ id: 'a', hpOnDblClick: true }).hpOnDblClick, true);
+  assert.equal(sanitizeToken({ id: 'a', hpOnDblClick: 'nope' }).hpOnDblClick, false);
+  assert.ok(!('hpOnDblClick' in sanitizeToken({ id: 'a' })));
 });
 
 test('сцена: остальные поля патча сливаются как раньше', () => {
