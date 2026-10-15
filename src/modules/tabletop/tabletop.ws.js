@@ -98,6 +98,16 @@ function attachTabletopWs(httpServer) {
     }
   }
 
+  /** Служебный кадр всем подписчикам игры (без записи в ленту) — например, пинг на карте. */
+  function broadcastFrame(gameId, frame) {
+    const set = subscribersByGame.get(gameId);
+    if (!set) return;
+    const text = JSON.stringify(frame);
+    for (const client of set) {
+      if (client.ws.readyState === WebSocket.OPEN) client.ws.send(text);
+    }
+  }
+
   httpServer.on('upgrade', (request, socket, head) => {
     const host = request.headers.host || 'localhost';
     const pathname = new URL(request.url, `http://${host}`).pathname;
@@ -214,6 +224,23 @@ function attachTabletopWs(httpServer) {
             private: msg.private
           });
           broadcastEvent(client.gameId, event);
+          return;
+        }
+
+        // Пинг на карте: точка в координатах карты уходит всем за столом с именем отправителя;
+        // нигде не хранится и в ленту не пишется.
+        if (msg.type === 'mapPing' && client.gameId) {
+          const x = Number(msg.x);
+          const y = Number(msg.y);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+          const name = await tabletopService.getUserDisplayName(client.userId);
+          broadcastFrame(client.gameId, {
+            type: 'mapPing',
+            x: Math.round(x),
+            y: Math.round(y),
+            userId: client.userId,
+            name
+          });
           return;
         }
 
