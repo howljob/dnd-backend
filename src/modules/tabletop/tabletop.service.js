@@ -307,6 +307,8 @@ function sanitizeToken(token) {
   }
   // Подпись с именем под токеном: по умолчанию скрыта, мастер включает галочкой.
   if ('showName' in out) out.showName = out.showName === true || out.showName === 'true';
+  // Цифры хитов под токеном показываются только по двойному клику (галочка в карточке токена).
+  if ('hpOnDblClick' in out) out.hpOnDblClick = out.hpOnDblClick === true || out.hpOnDblClick === 'true';
   return out;
 }
 
@@ -755,6 +757,7 @@ async function patchSceneState(auth, gameId, sceneId, body) {
       for (const key of TOKEN_HP_FIELDS) {
         if (key in t) ex[key] = t[key];
       }
+      if ('hpOnDblClick' in t) ex.hpOnDblClick = t.hpOnDblClick;
       if ('conditions' in t) ex.conditions = t.conditions;
     }
     const merged = normalizeSceneState({ ...cur, tokens: Array.from(byId.values()) });
